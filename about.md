@@ -4,11 +4,15 @@ title: About
 permalink: /about/
 ---
 
-I'm a scientist by training (PhD in computational physics) who works from first principles: I learn how a technology actually works, then build with it.
+I think curiosity is what makes humans feel alive. It's what makes us explore, discover, invent, try things, get them wrong, and come back a little smarter. I'd like to see AI models pick up that same drive, and I think it's part of what real intelligence will look like. That's why my project is called [CuriosLM](https://huggingface.co/CuriosLM).
 
-On this blog I write up what I learn from pretraining and post-training small language models from scratch, implementing the model architecture and training loop myself.
+It's also how I learn, and that's what this blog is: I train small language models from scratch, building on open-source work. I change one piece at a time and write up what happens, including what didn't work.
 
-- LinkedIn: <!-- add your LinkedIn URL -->
-- GitHub: [github.com/Shinibali](https://github.com/Shinibali)
+Background: I trained as a physicist (PhD in computational physics), worked briefly in quantum computing research, and am currently an Applied Scientist at AWS.
 
-*This is personal work, done on my own time. Views are my own and don't represent my employer.*
+* [LinkedIn](https://www.linkedin.com/in/shinibali-bhattacharyya/)
+* [X](https://x.com/ShinibaliB)
+* [GitHub](https://github.com/Shinibali)
+* [Hugging Face Org](https://huggingface.co/CuriosLM)
+
+*Views are my own and don't represent my employer.*
