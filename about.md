@@ -10,9 +10,5 @@ It's also how I learn, and that's what this blog is: I train small language mode
 
 Background: I trained as a physicist (PhD in computational physics), worked briefly in quantum computing research, and am currently an Applied Scientist at AWS.
 
-* [LinkedIn](https://www.linkedin.com/in/shinibali-bhattacharyya/)
-* [X](https://x.com/ShinibaliB)
-* [GitHub](https://github.com/Shinibali)
-* [Hugging Face Org](https://huggingface.co/CuriosLM)
 
 *Views are my own and don't represent my employer.*
