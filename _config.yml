@@ -1,0 +1,9 @@
+title: Shinibali Bhattacharyya
+description: Notes from pretraining and post-training small language models from scratch.
+url: "https://shinibali.github.io"
+baseurl: ""
+theme: minima
+header_pages:
+  - about.md
+plugins:
+  - jekyll-feed
