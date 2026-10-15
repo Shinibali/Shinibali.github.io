@@ -23,5 +23,60 @@
                           overflow-x: auto; font-size: 0.85em; }
     /* a note under a table ({: .table-note} in the post), one step smaller than body text */
     .post-content .table-note { font-size: 0.875em; }
+
+    /* night mode: html[data-theme="dark"], set below from the reader's choice or their system setting */
+    html[data-theme="dark"] body { background: #16181d; color: #d4d7dd; }
+    html[data-theme="dark"] a, html[data-theme="dark"] a:visited { color: #79b0ff; }
+    html[data-theme="dark"] .site-title, html[data-theme="dark"] .site-title:visited,
+    html[data-theme="dark"] .site-nav .page-link, html[data-theme="dark"] .post-link { color: #e6e8ec; }
+    html[data-theme="dark"] .site-header { border-bottom-color: #2c3038; border-top-color: #3a3f48; }
+    html[data-theme="dark"] .site-footer { border-top-color: #2c3038; }
+    html[data-theme="dark"] .post-meta, html[data-theme="dark"] .footer-col-wrapper { color: #9aa0aa; }
+    html[data-theme="dark"] .site-nav { background-color: #16181d; border-color: #2c3038; }
+    html[data-theme="dark"] .site-nav .menu-icon > svg path { fill: #c0c4cc; }
+    html[data-theme="dark"] blockquote { color: #a9aeb7; border-left-color: #3a3f48; }
+    html[data-theme="dark"] pre, html[data-theme="dark"] code, html[data-theme="dark"] .highlight {
+      background: #1f2228; border-color: #2c3038; color: #d4d7dd; }
+    html[data-theme="dark"] .highlight * { color: inherit !important; background: transparent !important; }
+    html[data-theme="dark"] table { color: #d4d7dd; border-color: #2c3038; }
+    html[data-theme="dark"] th { background-color: #22252c; border-color: #343943; }
+    html[data-theme="dark"] td { border-color: #2c3038; }
+    html[data-theme="dark"] tr:nth-child(even) { background-color: #1c1f25; }
+    html[data-theme="dark"] .post-content img { filter: brightness(0.88); border-radius: 4px; }
+    .theme-toggle { float: right; margin: 13px 0 0 18px; padding: 2px 8px; font-size: 18px; line-height: 26px;
+                    background: none; color: inherit; border: 1px solid #d0d3d8; border-radius: 6px; cursor: pointer; }
+    html[data-theme="dark"] .theme-toggle { border-color: #3a3f48; }
+    /* on phones minima pins its menu button to the top right; sit just left of it */
+    @media screen and (max-width: 600px) { .theme-toggle { margin-right: 44px; } }
   </style>
+  <script>
+    // Pick the theme before the page paints (no white flash): the reader's saved choice, else their system setting.
+    (function () {
+      var saved = null;
+      try { saved = localStorage.getItem("theme"); } catch (e) {}
+      var dark = saved ? saved === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
+      document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+    })();
+    // A moon/sun button in the header flips the theme and remembers the choice.
+    document.addEventListener("DOMContentLoaded", function () {
+      var header = document.querySelector(".site-header .wrapper");
+      if (!header) return;
+      var button = document.createElement("button");
+      button.className = "theme-toggle";
+      var paint = function () {
+        var dark = document.documentElement.getAttribute("data-theme") === "dark";
+        button.textContent = dark ? "☀︎" : "☾";
+        button.setAttribute("aria-label", dark ? "Switch to day mode" : "Switch to night mode");
+        button.title = button.getAttribute("aria-label");
+      };
+      button.addEventListener("click", function () {
+        var next = document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", next);
+        try { localStorage.setItem("theme", next); } catch (e) {}
+        paint();
+      });
+      paint();
+      header.appendChild(button);
+    });
+  </script>
 </head>
