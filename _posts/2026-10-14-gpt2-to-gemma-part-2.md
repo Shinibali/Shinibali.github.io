@@ -7,9 +7,9 @@ math: true
 
 ---
 
-This is the second part of my GPT-2 to Gemma 3-style language model series. In [Part 1](/gpt2-to-gemma-part-1/), I trained a GPT-2 (Model A) and a
-Gemma 3-style model (Model B) of about the same size on the same 9.8 billion tokens and found them tied on quality, with the
-Gemma recipe slightly slower to train. In this part, I look at the model internals at test time: how
+This is the second part of my GPT-2 to Gemma 3-style language model series. In [Part 1](/gpt2-to-gemma-part-1/), I trained a GPT-2 124M (Model A) and a
+Gemma 3-style 113M model (Model B) on the same 9.8 billion tokens and found them tied on quality, with the
+Gemma recipe slightly slower to train but with a 6.4× smaller KV cache. In this part, I look at the model internals at test time: how
 fast they generate text, how they represent position, what they attend to, and how far Model B's context can be stretched
 with YaRN.
 
@@ -840,6 +840,13 @@ Everyone I acknowledged in [Part 1](/gpt2-to-gemma-part-1/#acknowledgement) shap
 [*CS336: Language Modeling from Scratch*](https://cs336.stanford.edu/). Horace He's [*Making Deep Learning Go Brrrr From First Principles*](https://horace.io/brrr_intro.html) gave me
 the way to think about generation speed here: compute, memory bandwidth or overhead. Aleksa Gordić's
 [*Inside the Transformer: The Life of a Token*](https://www.aleksagordic.com/blog/transformer) is the best place to read about RoPE, YaRN and hybrid attention in depth.
+
+Platforms and tools I used for this part:
+
+- I rented H100s on [RunPod](https://www.runpod.io/) for the inference benchmark and the YaRN fine-tune.
+- [Weights & Biases](https://wandb.ai/) tracked the fine-tuning run.
+- [Hugging Face Hub](https://huggingface.co/) hosts all three models, including the YaRN-extended Model B.
+- [Claude Code](https://claude.com/claude-code), Anthropic's coding assistant, worked alongside me: it helped build and test the KV cache and the analysis scripts, debug the fine-tune setup, and draft and fact-check this article.
 
 If you spot a mistake, or have comments or critiques, I'd be glad to hear them on
 [LinkedIn](https://www.linkedin.com/in/shinibali-bhattacharyya/) or [X](https://x.com/ShinibaliB).
