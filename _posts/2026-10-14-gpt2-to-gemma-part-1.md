@@ -1,6 +1,6 @@
 ---
 layout: post
-title: "GPT-2 (124M) to Gemma 3-Style (113M) language models, Part 1: Pretraining Lessons from Swapping One Architecture Component at a Time"
+title: "GPT-2 (124M) to Gemma 3-Style (113M) language models, Part 1: Pretraining lessons from swapping one architecture component at a time"
 date: 2026-10-14
 math: true
 ---
@@ -751,7 +751,7 @@ moment estimates). For comparison, a 7B checkpoint would be about 84 GB, close t
 ```bibtex
 @misc{bhattacharyya2026gpt_to_gemma_1,
   author       = {Bhattacharyya, Shinibali},
-  title        = {GPT-2 (124M) to Gemma 3-Style (113M) language models, Part 1: Pretraining Lessons from Swapping One Architecture Component at a Time},
+  title        = {GPT-2 (124M) to Gemma 3-Style (113M) language models, Part 1: Pretraining lessons from swapping one architecture component at a time},
   year         = {2026},
   url          = {https://shinibali.github.io/gpt2-to-gemma-part-1/},
 }
