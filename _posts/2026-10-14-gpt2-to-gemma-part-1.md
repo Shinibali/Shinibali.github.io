@@ -599,7 +599,7 @@ This article leans on people who explained things well and acted as my knowledge
 
 Platforms and tools I used:
 
-- [RunPod](https://www.runpod.io/) provided the H100 GPUs, rented by the hour, for every training run.
+- I rented the H100 GPUs for every training run by the hour on [RunPod](https://www.runpod.io/).
 - [Weights & Biases](https://wandb.ai/) logged every run. Most of the figures here are rebuilt from those logs.
 - [Hugging Face Hub](https://huggingface.co/) stored the model checkpoints and the tokenized shards.
 - EleutherAI's [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness) ran every benchmark.
