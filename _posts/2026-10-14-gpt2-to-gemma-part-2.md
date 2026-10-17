@@ -37,13 +37,11 @@ As a reminder, the two models from Part 1 (124M and 113M parameters, 1024 contex
 
 The two models tied on loss and on every benchmark. On paper, Model B needs fewer FLOPs; in practice, it trained 4% slower. Most of the Gemma recipe targets efficiency and longer contexts. Its two attention changes, GQA and local windows,
 shrink the memory a model needs during inference, and RoPE makes position relative and easier to extend to
-longer contexts. The sections below test each of these: the cost of generating text, how each model represents
-position, and how well Model B's context stretches with YaRN.
+longer contexts.
 
 ## Generating text with a KV cache
 
-Part 1's ladder showed the recipe's main payoff on paper: a 6.4× smaller KV cache. To measure what that buys during
-text generation, I benchmarked both models with a KV cache on two machines. The answer turned out to depend more
+To measure what the smaller cache buys during text generation, I benchmarked both models with a KV cache on two machines. The answer turned out to depend more
 on the machine than on the model.
 
 ### What a KV cache stores
@@ -102,7 +100,7 @@ one H100 (3.35 TB/s), both in float32, taking the median of repeated runs after 
 
 At 1024 tokens, prefill behaves the same on both machines: B is 8–10% slower, in line with Part 1's training slowdown
 (on the H100, short single-sequence prompts are even slower, because they are overhead-bound).
-Generation is where the two machines differ. On the Mac, B generates up to 1.55× faster (batch 8, 512-token prompt); on the H100, it's a third *slower*.
+Generation is where the two machines differ.
 
 The time per decode step shows why:
 
@@ -129,17 +127,14 @@ processing one. Its benefit only appears with longer prompts and bigger batches 
 
 ![KV-cache memory as the context grows](/assets/s1/efficiency/figures/kv_cache.png)
 
-The memory plot shows GQA's saving and the windows' saving separately. GQA divides the slope by four. The local windows make most of the
-layers stop growing at 511 positions, so past that point only B's three global layers keep adding to the cache. The
-measured sizes match the formula exactly, on both machines.
+The memory plot shows the two savings separately, and the measured sizes match the formula exactly on both machines.
 
 ### When the smaller cache starts to pay off
 
 So when would the H100 result flip? For cache traffic to outweigh about 4 ms of overhead, a step has to
 read around 13 GB, roughly 175 full-length sequences of Model A's float32 cache at once. Real serving systems work at
 that scale: large batches, long contexts, bigger models, and CUDA graphs and kernel fusion that cut the per-step
-overhead. A 124M model on a single H100 isn't there, so small-scale inference benchmarks, including this one, should be
-read with that in mind.
+overhead. A 124M model on a single H100 isn't there.
 
 ### The KV cache of a 7B model
 
@@ -205,12 +200,9 @@ you know which FLOP count it assumes.
 ### A note on attention's quadratic cost
 
 Per token, attention is linear in context length; summed over a whole sequence it's the familiar quadratic,
-about $$2d·T^2$$ FLOPs per layer. FlashAttention (Dao et al., 2022) [[11]](#ref-11) does the same arithmetic but cuts memory
-traffic, so the $$T × T$$ score matrix never has to sit in GPU memory, which is what makes long-context training fit
-at all. Within exact attention, only restricting which keys a query sees, as Model B's local windows do, changes the order, to $$O(T·W)$$
-per sequence, and only with a kernel that skips the masked blocks. The appendix
-([Attention and FlashAttention](#attention-and-flashattention)) works through
-the numbers.
+about $$2d·T^2$$ FLOPs per layer. FlashAttention (Dao et al., 2022) [[11]](#ref-11) is what makes that fit in GPU memory at
+long contexts, and only restricting which keys a query sees, as Model B's local windows do, changes the order. The
+appendix ([Attention and FlashAttention](#attention-and-flashattention)) works through the numbers.
 
 ## How each model represents position
 
@@ -276,8 +268,7 @@ by counting how many full turns each band makes within the 1024-token training c
 - **Middle bands** make between 1 and 32 turns (12 bands).
 - **Slow bands** never complete a single turn (the other 14).
 
-These are the same groups YaRN treats differently in the YaRN section below: it leaves the fast bands alone, rescales the slow
-ones, and blends the middle. The thresholds are counted in turns, so they mean the same thing at any context length,
+The thresholds are counted in turns, so they mean the same thing at any context length,
 but which bands they select shifts with the context. (The 1-turn cut-off follows from the definition; the 32-turn cut-off is an
 empirical choice the YaRN authors made for Llama models.)
 
@@ -293,7 +284,7 @@ Each row is one head (12 per layer, 12 layers) and each column one band, fastest
 that head's q·k weight. The dashed line separates the bands that turn within the context from the slow ones. The
 pattern leans toward the slow bands on the right:
 
-- **Overall:** the median slow-band weight is 53%, against 44% for a head that treated every band alike.
+- **Overall:** the median slow-band weight is 53%, against 44% for an even spread.
 - **Five heads have a slow-band weight above 75%:** one in layer 1, three in layer 6 and one in layer 8. They're the
   dark stripes on the right.
 - **No head concentrates on the fast bands.** The lowest slow-band weights, mostly in layer 0, sit at or just below the 44%
@@ -318,9 +309,7 @@ row sums the bands' contributions within each speed group: fast, middle and slow
 - the median (layer 9, head 1, 53%);
 - the lowest (layer 0, head 6, 42%).
 
-Panel titles mark global or local layers; local heads' curves stop at $$W = 512$$. The bottom row is the head's average
-score at each distance, and the top row splits it into the parts from its fast, middle and slow bands. The three parts
-add up exactly to the bottom row.
+Panel titles mark global or local layers; local heads' curves stop at $$W = 512$$.
 
 Each head matches one of the behaviours described earlier:
 
@@ -570,9 +559,7 @@ middle, and adds a small correction to the attention temperature. The paper show
 all, and better with a short fine-tune on long sequences.
 
 In terms of the fast, middle and slow bands from earlier, YaRN's default thresholds leave Model B's 6 fast bands alone, fully interpolate the 14 slow
-ones and blend the 12 in between, so 26 of the 32 bands in every head get rescaled. Stretching the
-context 2×, 4× or 8× without it would make 3, 5 or 7 more bands complete their first full turn, at angles the model
-never saw in training.
+ones and blend the 12 in between, so 26 of the 32 bands in every head get rescaled.
 
 ![Each RoPE band's wavelength in Model B, as trained and with YaRN at 4×](/assets/s1/positions/figures/yarn_bands.png)
 
@@ -582,15 +569,14 @@ YaRN moved that band. The two dashed lines mark the training length (1024) and t
 don't move. Gold bands are stretched the full 4×, and every one of them lands above the 4096 line. Teal bands are
 blended, moving less the faster they are.
 
-One number sums up what YaRN does here. Run plainly at 4096 tokens, 23 bands would complete a full
-turn, 5 more than in training. With YaRN it's 18 again: the same bands that turned within 1024 tokens during
+Without YaRN, stretching the context 2×, 4× or 8× would make 3, 5 or 7 more bands complete their first full turn, at
+angles the model never saw in training: at 4096 tokens, 23 bands instead of 18. With YaRN it's 18 again: the same bands that turned within 1024 tokens during
 training are the only ones that turn within 4096 now. Every band sees a range of angles it already knows.
 
 **Why 4×.** The YaRN paper's [[3]](#ref-3) zero-shot results hold up well to about twice the training length and
 degrade beyond it; the long-context results it's known for come after a short fine-tune. At 2×, zero-shot YaRN should
 already be close, leaving the fine-tune little to show; at 8×, the target is beyond zero-shot range and pages that
-long are rare (about 1% of FineWeb-Edu validation pages reach 8k tokens, against about 3% for 4k). At 4×, 5 bands
-newly complete a turn and there's room for the fine-tune to close the gap. Both versions are measured at 4096
+long are rare (about 1% of FineWeb-Edu validation pages reach 8k tokens, against about 3% for 4k). At 4×, there's room for the fine-tune to close the gap. Both versions are measured at 4096
 tokens.
 
 ### Design choices the paper leaves open
@@ -758,8 +744,7 @@ The measures behind the band-usage heatmap and the three real heads in the posit
 
 **From the weights.** Write $$W_q^{(j)}$$ for the rows of the head's query projection
 that produce band $$j$$'s two dimensions, and $$W_k^{(j)}$$ for the same rows of the key projection it shares under
-grouped-query attention, each with the RMSNorm gain in front of attention folded in. The head's **q·k weight** in band $$j$$ is the product of their sizes, as a share of the head's total; its **slow-band weight** sums that share over the 14
-slow bands, and a head that treated every band alike would get 14/32, or 44%:
+grouped-query attention, each with the RMSNorm gain in front of attention folded in. Then:
 
 $$w_j = \big\lVert W_q^{(j)} \big\rVert \cdot \big\lVert W_k^{(j)} \big\rVert, \qquad
 s_j = \frac{w_j}{\sum_{l=1}^{32} w_l}, \qquad
@@ -826,7 +811,7 @@ If you spot a mistake, or have comments or critiques, I'd be glad to hear them o
 ```bibtex
 @misc{bhattacharyya2026gpt_to_gemma_2,
   author       = {Bhattacharyya, Shinibali},
-  title        = {GPT-2 (124M) to Gemma 3-Style (113M) language model, Part 2: KV Caches, Attention Visualization, RoPE Clocks and 4× Context Extension},
+  title        = {GPT-2 (124M) to Gemma 3-Style (113M) language models, Part 2: KV caches, attention visualization, RoPE clocks and 4× context extension},
   year         = {2026},
   url          = {https://shinibali.github.io/gpt2-to-gemma-part-2/},
 }
