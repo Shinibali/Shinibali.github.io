@@ -1,68 +1,67 @@
 ---
 layout: post
-title: "GPT-2 (124M) to Gemma 3-Style (113M) language models, Part 2: KV Caches, Attention Visualization, RoPE Clocks and 4× Context Extension"
+title: "GPT-2 (124M) to Gemma 3-Style (113M) language models, Part 2: KV caches, attention visualization, RoPE clocks and 4× context extension"
 date: 2026-10-14
 math: true
----
-
 ---
 
 This is the second part of my GPT-2 to Gemma 3-style language model series. In [Part 1](/gpt2-to-gemma-part-1/), I trained a GPT-2 124M (Model A) and a
 Gemma 3-style 113M model (Model B) on the same 9.8 billion tokens and found them tied on quality, with the
 Gemma recipe slightly slower to train but with a 6.4× smaller KV cache. In this part, I look at the model internals at test time: how
-fast they generate text, how they represent position, what they attend to, and how far Model B's context can be stretched
-with YaRN.
+fast they generate text, how they represent position and what they attend to. I also extend Model B's context length
+from 1024 to 4096 tokens with YaRN.
 
 Here is the TLDR of what I found:
 
-- On my M1 Pro Mac, Model B generates text up to 1.55× faster than Model A, thanks to its 6.4× smaller KV cache. On an
-  H100 the same model is a third slower. At this size, the H100 spends most of each step on the fixed cost of launching
-  GPU operations, and Model B has more of them. The smaller cache only starts to pay off at serving scale, with big
+- On my M1 Pro MacBook, whose memory bandwidth is about 1/17 of an H100's, Model B generates text up to 1.55× faster
+  than Model A due to its 6.4× smaller KV cache. On an H100, Model B is 1/3 slower than A. At this size, the H100 spends most of each step on the fixed cost of launching
+  GPU operations, and Model B has more of them. So the smaller cache size pays off at serving scale, with big
   batches, long contexts and bigger models.
-- RoPE gives Model B 32 fixed "clocks" to read position from, while Model A's learned position table organizes itself
-  into slow waves. The two schemes look nothing alike, yet both models end up encoding position as the distance between tokens.
+- RoPE gives Model B 32 fixed "clocks" to read position from: pairs of dimensions that rotate at different speeds as
+  the position grows. Model A's learned position table organizes itself into slow waves instead. The two schemes work
+  differently, but both models end up encoding position as the distance between tokens.
 - Model B's strongest induction head, the circuit that copies text from earlier in the context, sits in a local layer.
-  So when the text to copy is 768 tokens back, Model A still copies it and Model B can't. On ordinary text the two models
+  So when the text to copy is, for example, 768 tokens back, Model A still copies it and Model B can't. On ordinary text the two models
   rarely disagree, and B's position scheme even changes where it parks attention it doesn't need.
-- YaRN stretches Model B from 1024 to 4096 tokens with no retraining at all, taking perplexity at 4096 from 37.7 down to
+- YaRN stretched Model B from 1024 to 4096 tokens (4×) with no retraining, taking perplexity at 4096 from 37.7 down to
   23.2. Continuing the training run for 200 steps (1% of pretraining) brings it to 21.0, close to the original model's
-  20.6 at 1024 tokens, and the first 25 steps already deliver three quarters of that gain.
+  20.6 at 1024 tokens.
 
 ## The two models
 
-As a reminder, the two models from Part 1 (124M and 113M parameters) were trained identically on FineWeb-Edu:
+As a reminder, the two models from Part 1 (124M and 113M parameters, 1024 context length) were trained identically on FineWeb-Edu:
 
 - **Model A** is GPT-2 as nanoGPT ships it: learned position embeddings and full multi-head attention in every layer.
 - **Model B** is Gemma 3-style [[9]](#ref-9): RoPE [[1]](#ref-1), grouped-query attention (12 query heads sharing 3 key/value heads), a GeGLU MLP,
   sandwich RMSNorm, and local 512-token attention in three layers out of four.
 
-The two models tied on loss and on every benchmark. On paper, Model B needs fewer FLOPs; in practice, it trained 4% slower.
-
-Most of the Gemma recipe targets efficiency and longer contexts. Its two attention changes, GQA and local windows,
-shrink the memory a model needs while it generates text, and RoPE makes position relative and easier to extend to
-longer contexts. In this part I measure all three: the cost of generating text, how each model represents position, and
-how far Model B's context can be stretched.
+The two models tied on loss and on every benchmark. On paper, Model B needs fewer FLOPs; in practice, it trained 4% slower. Most of the Gemma recipe targets efficiency and longer contexts. Its two attention changes, GQA and local windows,
+shrink the memory a model needs during inference, and RoPE makes position relative and easier to extend to
+longer contexts. The sections below test each of these: the cost of generating text, how each model represents
+position, and how well Model B's context stretches with YaRN.
 
 ## Generating text with a KV cache
 
 Part 1's ladder showed the recipe's main payoff on paper: a 6.4× smaller KV cache. To measure what that buys during
-text generation, I first had to build a KV cache, since nanoGPT doesn't have one. The answer turned out to depend more
+text generation, I benchmarked both models with a KV cache on two machines. The answer turned out to depend more
 on the machine than on the model.
 
-### Building the KV cache
+### What a KV cache stores
 
 A language model generates one token at a time, and each new token attends to every token before it. Without a cache,
 every step reprocesses the whole sequence from scratch, which is wasteful because the keys and values of earlier
 tokens never change. A KV cache stores them once and reuses them, so each step only has to process the one new token.
 
-Building it for all five ladder models from Part 1 (rungs a0–a4) took more care than the idea suggests: positions, rotated keys,
-grouped key/value heads, window eviction and the causal mask each need handling (details in the appendix,
-[What the KV cache has to get right](#what-the-kv-cache-has-to-get-right)). Only the 3 key/value heads are
-cached, which is where the 4× saving comes from, and a local layer's cache stops growing at 511 positions.
+Each layer stores one key and one value (the 2 below) per key/value head and per cached position, so the cache for
+one sequence takes
 
-To test it, I checked that at every step the cached model produces the same logits as recomputing the whole sequence
-from scratch. The tests check this for all five rungs, for single tokens, for chunks of tokens, and past the window
-limit.
+$$\text{KV cache bytes} = 2 \cdot n_{kv} \cdot h \cdot b \cdot \sum_{\ell=1}^{L} T_\ell$$
+
+where $$n_{kv}$$ is the number of key/value heads, $$h = 64$$ the head size, $$b$$ the bytes per number (4 in float32)
+and $$T_\ell$$ the number of positions layer $$\ell$$ keeps. Model A keeps all 12 heads for all 1024 positions in all
+12 layers: 75.5 MB. Model B keeps only its 3 key/value heads, which its 12 query heads share, a 4× saving. Its local
+layers never look further back than their window, so 9 of its 12 layers stop at 511 positions. Together that's
+11.8 MB, 6.4× smaller.
 
 ### What limits generation speed
 
@@ -90,8 +89,8 @@ decode reads it.
 
 ### Mac vs H100
 
-I ran the same benchmark on my M1 Pro MacBook and on one H100, both in float32, with warm-up runs, GPU synchronization
-before reading the clock, and the median of repeated runs. Each generation run produces 256 new tokens.
+I ran the same benchmark on my M1 Pro MacBook (16-core GPU, 16 GB of unified memory, 200 GB/s memory bandwidth) and on
+one H100 (3.35 TB/s), both in float32, taking the median of repeated runs after warm-up. Each generation run produces 256 new tokens.
 
 | | Model A | Model B | B vs A |
 |---|---|---|---|
@@ -210,7 +209,7 @@ about $$2d·T^2$$ FLOPs per layer. FlashAttention (Dao et al., 2022) [[11]](#ref
 traffic, so the $$T × T$$ score matrix never has to sit in GPU memory, which is what makes long-context training fit
 at all. Within exact attention, only restricting which keys a query sees, as Model B's local windows do, changes the order, to $$O(T·W)$$
 per sequence, and only with a kernel that skips the masked blocks. The appendix
-([Attention, FlashAttention and the quadratic](#attention-flashattention-and-the-quadratic)) works through
+([Attention and FlashAttention](#attention-and-flashattention)) works through
 the numbers.
 
 ## How each model represents position
@@ -239,7 +238,11 @@ To see what these rotations do to attention, it helps to treat each pair of dime
 
 Take one head, with head size $$h = 64$$, and band $$j$$: dimensions $$j$$ and $$j + h/2$$, which RoPE rotates by $$m\theta_j$$ at position $$m$$, where $$\theta_j$$ is the band's fixed speed. The key at position $$n$$ is rotated the same way, by $$n\theta_j$$.
 
-**Step 1: a rotation is a multiplication.** The RoFormer paper [[1]](#ref-1) uses the same complex form. Write the query's pair as one complex number, $$z_j^q(m) = q_j(m) + \mathrm{i}\,q_{j+h/2}(m)$$, and the key's as $$z_j^k(n)$$. Rotating a 2-D vector by an angle $$\alpha$$ is the same as
+**Step 1: a rotation is a multiplication.** The RoFormer paper [[1]](#ref-1) uses the same complex form. Write the query's pair as one complex number
+
+$$z_j^q(m) = q_j(m) + \mathrm{i}\,q_{j+h/2}(m),$$
+
+and the key's as $$z_j^k(n)$$. Rotating a 2-D vector by an angle $$\alpha$$ is the same as
 multiplying its complex number by $$e^{\mathrm{i}\alpha}$$. So RoPE turns the query's pair into $$z_j^q(m)\,e^{\mathrm{i} m \theta_j}$$, and the key's into $$z_j^k(n)\,e^{\mathrm{i} n \theta_j}$$.
 
 **Step 2: a dot product is the real part of a product.** For two 2-D vectors written as complex numbers $$a$$ and $$b$$,
@@ -317,8 +320,7 @@ row sums the bands' contributions within each speed group: fast, middle and slow
 
 Panel titles mark global or local layers; local heads' curves stop at $$W = 512$$. The bottom row is the head's average
 score at each distance, and the top row splits it into the parts from its fast, middle and slow bands. The three parts
-add up exactly to the bottom row: I checked the split against the model's own attention scores, and they agree to
-every printed digit.
+add up exactly to the bottom row.
 
 Each head matches one of the behaviours described earlier:
 
@@ -397,12 +399,10 @@ This section looks at what each model attends to while it reads. A word of cauti
 information *can* flow, which is weaker evidence than showing why a model made a prediction (Jain & Wallace, 2019) [[13]](#ref-13). And a weight averaged over a
 layer's heads can hide a single head doing something sharp. So I treat the views below as a way to look inside the models.
 
-**Getting the weights.** The fused kernels (PyTorch's scaled-dot-product attention, and FlexAttention for Model B's
-windows) never form attention probabilities as a tensor. So the model gets an evaluation-only path that computes $$\mathrm{softmax}(q·k^T/\sqrt{h} + \text{mask})$$ step by step, with the same masks and key/value grouping; a test checks that it reproduces
-the fused output exactly.
+A small example first, with emojis! 🤗
 
-A small example first, with emojis. GPT-2's tokenizer works on bytes, and
-an emoji is four bytes of UTF-8. In "Learning is Fun 🤗, Keep exploring 🔭", each emoji becomes three tokens: one they
+GPT-2's tokenizer works on bytes, and
+an emoji is four bytes of UTF-8. In ***"Learning is Fun 🤗, Keep exploring 🔭"***, each emoji becomes three tokens: one they
 share (a space and the first two bytes, which every emoji from U+1F000 to U+1FFFF begins with) and two of their own.
 Reading the shared token, a model can't know which emoji is coming; only the later tokens decide. Both models make
 the same bet there. At the shared first token of the telescope, Model A gives 86% to the next byte of the hugging face
@@ -417,8 +417,7 @@ Asked to continue the line, always picking the most likely next token, both mode
 
 Model B copies the line exactly. Model A copies it with the wrong emoji at the end, every time: at the token the two
 emoji share, it completes the first one it saw. Small models picking greedily fall into loops like this; that's a
-known property of greedy decoding (Holtzman et al., 2019) [[8]](#ref-8). With sampling instead, using the same
-settings as the sampling script, both write ordinary on-topic text: Model A continues "for more learning! 🔨 This is
+known property of greedy decoding (Holtzman et al., 2019) [[8]](#ref-8). With sampling instead, both write ordinary on-topic text: Model A continues "for more learning! 🔨 This is
 the first part of our series of lessons!", Model B "for more fun learning activities. 1. The Elements of Play".
 
 The copying is visible in the attention itself. For each model, the figure below shows every layer's attention,
@@ -702,38 +701,6 @@ perplexity from 23.2 to 21.5, 77% of the total gain (1.7 of 2.2); by step 100 it
 steps add almost nothing. The gold line is back at the original model's quality by step 75. Of the two ways of scaling
 the paper's budget down, matching the share of pretraining (about 20 steps) turned out to be the better guide to where the curve bends.
 
-## Bugs I hit along the way
-
-Part 1 lists the bugs from training. These came up while building and measuring things for this part:
-
-- **The KV cache, built by hand, had its own bugs before it matched full recomputation:**
-  - a position embedding off by one;
-  - the cache length read with `len()` instead of the sequence dimension;
-  - key positions computed from the new tokens only;
-  - the subtle one: PyTorch's `is_causal` aligning the mask top-left when there are fewer queries than keys.
-
-  The cached-vs-recomputed test caught every one.
-- **The H100 benchmark first ran on the CPU:** The device helper checked for Apple's GPU and otherwise fell back to the
-  CPU, never checking for CUDA. On the Mac that was invisible; on the pod, four idle H100s and 90 busy CPU cores gave
-  it away.
-- **A formula that double-counted:** The KV-cache size formula multiplied by the number of stored positions twice,
-  after a refactor. Comparing the formula against the measured cache sizes caught it, the same check the
-  memory figure makes.
-- **The fine-tune's first draft copied "resume":** Continuing a finished run looks like resuming, so the first draft
-  reused the resume path wholesale: the old context length, the old loader position (which the long-page loader
-  rejected), the old best validation loss and the old experiment-tracking run. A laptop dry run caught all four
-  before any GPU time.
-- **`is` instead of `==`:** A check written `init_from is "resume"` asks whether two objects are the same object in memory; comparing text needs `==`. It happened
-  to work for the value set in a config file and would have failed silently for the same word typed on the command
-  line.
-- **Parity in the wrong place:** The fine-tune evaluated as often as pretraining did, every 5% of the run, but each
-  evaluation was still pretraining-sized: about 12M tokens scored every 10 steps, more than the 4.9M trained in
-  between. Evaluations and saves took about 70% of the 23-minute run, and because every logged step was an evaluation
-  step, MFU never got logged. The fix: evaluate only at snapshots, on fewer batches.
-- **A dry run that started downloading the dataset:** The first laptop dry run went through the training script's
-  normal data setup, which fetches every missing shard, and had pulled about 13 GB before I stopped it. Dry runs now
-  skip the download.
-
 ## Caveats, and what to expect at larger scale
 
 The inference numbers come from one model size, two machines and float32 without kernel fusion or CUDA graphs, all of
@@ -755,21 +722,6 @@ copying result. The attention analysis is also descriptive: it shows where atten
 a causal check, such as switching a head off and measuring what breaks, which is the natural next step.
 
 ## Appendix
-
-### What the KV cache has to get right
-
-The details behind the KV cache, for every rung of the ladder:
-
-- **Positions.** A new token at position 700 needs position 700's embedding (Model A) or rotation (Model B), not
-  position 0's. The cache keeps a running position counter.
-- **RoPE.** Keys are cached *after* rotation, so each cached key keeps the position it was rotated at.
-- **GQA.** Only the 3 key/value heads go into the cache, shared by the 12 query heads. That's where the 4× saving comes
-  from.
-- **Local windows.** A local layer never looks further back than its window, so it can throw away anything older.
-  Its cache stops growing at 511 positions.
-- **The causal mask.** PyTorch's `is_causal=True` lines the mask up from the top-left corner. That's correct when
-  queries and keys have the same length, and wrong when one new query faces 700 cached keys. The cached path builds
-  its mask explicitly from the true positions instead.
 
 ### Attention and FlashAttention
 
@@ -823,8 +775,7 @@ $$S_j(\Delta) = \frac{1}{T - \Delta} \sum_{n=0}^{T-1-\Delta}
 
 averaged over 64 held-out windows. The factor $$e^{\mathrm{i}\Delta\theta_j}$$ is RoPE's rotation at that distance; everything else is
 content. The figure's bottom row is the head's mean score, $$S(\Delta) = \sum_j S_j(\Delta)$$. The top row sums $$S_j(\Delta)$$ over each speed
-group: fast, middle and slow. (The averaging over $$n$$ is a cross-correlation, so it takes one FFT per head rather than
-a $$T × T$$ loop.)
+group: fast, middle and slow.
 
 ### Code and models
 
