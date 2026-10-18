@@ -403,7 +403,7 @@ pair at the same distance gets exactly the same value.
 
 Breaking Model A's table into waves along the position axis (a Fourier transform) shows the same thing: two-thirds of its
 variation sits in a handful of slow waves, 341 positions and longer, and most of the rest, about 22%, is a flat,
-noise-like floor at short wavelengths. RoPE puts structured waves exactly there, from 6 positions up, and keeps 14
+noise-like floor at short wavelengths. RoPE puts structured waves there, from 6 positions up, and keeps 14
 bands slower than the whole window, which a table of 1024 rows can't represent at all.
 
 That's one plausible reason RoPE was the one change in Part 1's ladder that improved loss, and it's why YaRN, later in this
@@ -411,18 +411,17 @@ article, has slow bands to rescale.
 
 ### Position at longer contexts
 
-At longer contexts, the two schemes behave very differently. Model A's position table simply stops at 1024 rows, so it
+At longer contexts, the two schemes behave very differently. Model A's position table stops at 1024 rows, so it
 can't read further at all. Building one for a 128k context in a 7B-class model would take 537M parameters, each row
-trained only on the tokens that happen to land at its position. This is a big part of why learned position
-tables have all but disappeared from long-context models.
+trained only on the tokens that happen to land at its position. This is part of why long-context models use RoPE or another
+relative scheme instead.
 
 RoPE needs adjusting too. With the base of 10,000 used here, every one of a 128-dimensional head's 64 bands completes
 a turn within 128k tokens, so no band is slow enough to tell "far" from "very far". Long-context models raise the
 base: Llama 3 [[10]](#ref-10) uses 500,000, and Gemma 3 uses 1,000,000 on its global layers. That leaves 15 and 17 bands slower than
 the whole 128k context. Model B's windows save more and more memory as the context grows, but more and more of the
 context also lies outside them. In Gemma 3's layout, five layers in six never look beyond 1024 tokens, even at a
-128k context, so everything long-range has to travel through the global layers. That's the price of the memory savings, and the reason
-the design keeps some global layers.
+128k context, so everything long-range has to travel through the global layers. This is why Gemma 3 keeps one global layer in six.
 
 ## Extending Model B's context from 1024 to 4096 with YaRN
 
@@ -450,7 +449,7 @@ blended, moving less the faster they are.
 
 Without YaRN, stretching the context 2×, 4× or 8× would make 3, 5 or 7 more bands complete their first full turn, at
 angles the model never saw in training: at 4096 tokens, 23 bands instead of 18. With YaRN it's 18 again: the same bands that turned within 1024 tokens during
-training are the only ones that turn within 4096 now. Every band sees a range of angles it already knows.
+training are the only ones that turn within 4096 now.
 
 **Why 4×.** The YaRN paper's [[3]](#ref-3) zero-shot results hold up well to about twice the training length and
 degrade beyond it; the long-context results it's known for come after a short fine-tune. At 2×, zero-shot YaRN should
@@ -528,7 +527,7 @@ one pass over almost all of the 10B-token sample. Repeating about 1% of the data
 come from the held-out split, which the model never trained on.
 
 The run is 200 steps, about 98M tokens or 1% of pretraining, and keeps a snapshot of the weights every 25 steps.
-The snapshots show how much fine-tuning is actually needed, so I didn't have to guess.
+Scoring each snapshot shows how many steps the fine-tune actually needs.
 
 It took about 23 minutes on one H100. The first step's gradient norm was 1.49, the first gradient the model had ever
 seen from positions beyond 1024; clipping at 1.0 caught it. Within 40 steps it settled at about 0.28, close to the end
@@ -545,7 +544,7 @@ The most useful comparison is with Model B as originally trained. The original M
 21.0, and its loss at positions 2048–4096 (3.05) is within 0.03 of the original model's at 512–1024. So the model gets four times
 the context at nearly the same per-token quality, for 1% of the original training tokens.
 
-Some caution is needed here. The fine-tune trained on exactly this kind of text, the opening 4096 tokens of
+One caveat: the fine-tune trained on this kind of text, the opening 4096 tokens of
 long pages, so some of its gain is plain adaptation to the page type: it's better than the original even at the
 first 256 tokens (21.1 against 21.4), where position plays no part. Also, the per-position loss stays level rather
 than falling past 1024, for the fine-tuned model as for the original one within its own range. Later tokens in these
@@ -568,7 +567,7 @@ the paper's budget down, matching the share of pretraining (about 20 steps) turn
 
 ## Visualizing attention
 
-This section looks at what each model attends to while it reads. A word of caution first: attention weights show where
+This section looks at what each model attends to while it reads. Attention weights show where
 information *can* flow, which is weaker evidence than showing why a model made a prediction (Jain & Wallace, 2019) [[13]](#ref-13). And a weight averaged over a
 layer's heads can hide a single head doing something sharp. So I treat the views below as a way to look inside the models.
 
@@ -636,8 +635,7 @@ The separator share is averaged only over the windows that contain a separator.
 
 Model A's heads look further back on average: 132 tokens against Model B's 81. A has three layers averaging more
 than 200 tokens (0, 7 and 10) and single heads reaching almost 480. B's global layers don't compensate: its most
-far-sighted layer, global layer 8, averages 148 tokens, and its farthest-looking head 235. On ordinary text, B simply
-looks less far, and none of its heads comes close to the 512-token window that would stop it.
+far-sighted layer, global layer 8, averages 148 tokens, and its farthest-looking head 235. On ordinary text, B looks less far, and none of its heads comes close to the 512-token window that would stop it.
 
 The two sink panels show the clearest difference between the recipes. Model A rests attention on position 0 (up to
 13% of a layer's attention, in its later layers) and even more on document separators (up to 29%). Model B's global layers never
@@ -649,7 +647,7 @@ token it can recognise instead.
 
 ### Induction heads and the local window
 
-The best-documented circuit in language models is the *induction head*, first described by Elhage et al. (2021)
+One of the best-studied circuits in language models is the *induction head*, first described by Elhage et al. (2021)
 [[14]](#ref-14) and studied in depth by Olsson et al. (2022) [[5]](#ref-5): at a token it has seen before, it attends to
 the token that followed the earlier occurrence, so the model can copy what came next. The standard test, from those papers, removes every
 other clue: a block of 64 random tokens, random filler, then the same 64 tokens again. Nothing can predict a random
@@ -690,8 +688,8 @@ With the repeat 768 tokens back, Model A is barely affected: the same head still
 costs 12.3 nats, almost as much as tokens it has never seen. Its strongest induction head lives in layer 6, a local
 layer, and the earlier copy is now out of that layer's reach. None of its three global layers took over the job.
 
-This is a cost of the local/global recipe that average loss doesn't show. Copying from far back is a narrow
-skill, but a real one, and in Model B the windows' memory savings came at exactly that cost.
+Average loss doesn't show this cost of the local/global recipe: Model B's windows save memory, and the model loses
+the ability to copy from beyond them.
 
 ### Where the two models disagree
 
@@ -747,7 +745,7 @@ should carry over to larger models and longer contexts, and what each expectatio
 
 A second seed of Model B could, for instance, place its induction head in a global layer, which would change the
 copying result. The attention analysis is also descriptive: it shows where attention goes. Showing that the model needs it there takes
-a causal check, such as switching a head off and measuring what breaks, which is the natural next step.
+a causal check, such as switching a head off and measuring what breaks.
 
 ## Appendix
 
@@ -758,8 +756,8 @@ This works through the numbers behind the short note on attention's quadratic co
 All of this has been counted per token, and per token, attention is *linear* in context length: a token at position $$p$$
 compares itself with $$p + 1$$ keys, so it costs $$4d·(p + 1)$$ FLOPs. That's why the formula uses the average, $$4d·\bar{k}$$. The
 famous quadratic appears when you add up a whole sequence. $$T$$ tokens, each attending to everything before it, make $$T(T + 1)/2$$ query-key pairs, about $$2d·T^2$$ FLOPs per layer.
-For example, a 7B-class model with full attention, the attention FLOPs for one sequence grow from about 0.3 TFLOP at 1k
-tokens to about 4,500 TFLOP at 128k: 128 times the context, 15,000 times the work.
+For a 7B-class model with full attention, the attention FLOPs for one sequence grow from about 0.3 TFLOP at 1k
+tokens to about 4,500 TFLOP at 128k: 128 times the context, about 16,000 times the work.
 
 FlashAttention [[11]](#ref-11) computes exact attention, so the arithmetic stays the same, and its backward pass
 even recomputes the scores instead of storing them. What it reduces is memory traffic. Instead of writing the $$T × T$$
@@ -769,10 +767,10 @@ weighted sum into one kernel. Memory grows with $$T$$ instead of $$T^2$$, and th
 Our own runs show why that matters even at 1024 tokens. With 12 heads and 60 sequences per GPU, the score matrices
 for one layer would take about 1.5 GB in bf16, and keeping all 12 layers' for the backward pass would take about
 18 GB. At 128k tokens, just a single head's scores for one sequence would be 34 GB, more than a third of an H100's memory.
-Without FlashAttention, long-context training simply wouldn't fit.
+Without FlashAttention, long-context training wouldn't fit.
 
 So FlashAttention makes quadratic attention practical, and the cost stays quadratic. Within exact attention, only
-restricting which keys a query sees changes the order itself, like what Model B's local windows do: a local layer costs $$O(T·W)$$ per sequence linear in $$T$$. In time, that saving needs a kernel that skips the blocks outside the window, like
+restricting which keys a query sees changes the order itself, like what Model B's local windows do: a local layer costs $$O(T·W)$$ per sequence, linear in $$T$$. In time, that saving needs a kernel that skips the blocks outside the window, like
 FlexAttention's block masks or FlashAttention's window option. With an ordinary dense mask, all $$T^2$$ scores are
 computed and most thrown away, which is why the dense-mask version in Part 1's ladder trained *slower*; FlexAttention recovered about 5% of that.
 
