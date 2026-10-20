@@ -7,7 +7,7 @@ math: true
 
 This is the second part of my GPT-2 to Gemma 3-style language model series. In [Part 1](/gpt2-to-gemma-part-1/), I trained a GPT-2 124M (Model A) and a
 Gemma 3-style 113M model (Model B) on the same 9.8 billion tokens and found them tied on quality, with the
-Gemma recipe slightly slower to train but with a 6.4× smaller KV cache. In this part, I look at the model internals at test time: how
+Gemma recipe slightly slower to train but with a 6.4× smaller KV cache. In this part, I look at the model internals at inference time: how
 fast they generate text and how they represent position. I then extend Model B's context length from 1024 to 4096
 tokens with YaRN, and finally look at what each model attends to.
 
@@ -19,13 +19,13 @@ Here is the TLDR of what I found:
   batches, long contexts and bigger models.
 - RoPE gives Model B 32 fixed "clocks" to read position from: pairs of dimensions that rotate at different speeds as
   the position grows. Model A's learned position table organizes itself into slow waves instead. The two schemes work
-  differently, but both models end up encoding position as the distance between tokens.
+  differently, but in both models, how similar two positions look depends mainly on how far apart they are. 
 - YaRN helped stretch Model B from 1024 to 4096 tokens (4×) with no retraining, taking perplexity at 4096 from 37.7 down to
-  23.2. Continuing the training run for 200 steps (1% of pretraining) brings it to 21.0, close to the original model's
+  23.2. Continuing the training run for 200 steps (1% of pretraining) brings perplexity to 21.0, close to the original model's
   20.6 at 1024 tokens.
 - Model B's strongest induction head, the circuit that copies text from earlier in the context, sits in a local layer.
   So when the text to copy is, for example, 768 tokens back, Model A still copies it and Model B can't. On ordinary text the two models
-  rarely disagree, and B's position scheme even changes where it parks attention it doesn't need.
+  rarely disagree.
 
 ## The two models
 
@@ -48,7 +48,7 @@ on the hardware than on the model.
 
 A language model generates one token at a time, and each new token attends to every token before it. Without a cache,
 every step reprocesses the whole sequence from scratch, which is wasteful because the keys and values of earlier
-tokens never change. A KV cache stores them once and reuses them, so each step only has to process the one new token.
+tokens never change. A KV cache stores them once and reuses them, so each step only has to process  one new token.
 Queries aren't cached because in a causal model, each token's query is used only once, to compute that token's own
 output, which later tokens can never change. Only keys and values are read again by every token that comes after.
 
@@ -67,15 +67,15 @@ where:
   layer keeps every 1024 token; a local layer keeps at most 511.
 
 Model A keeps all 12 heads for all 1024 positions in all
-12 layers: 75.5 MB. Model B keeps only its 3 key/value heads, which its 12 query heads share, a 4× saving. Its local
+12 layers: 75.5 MB. Model B keeps only its 3 key/value heads, which its 12 query heads share, a 4x saving. Its local
 layers never look further back than their window, so 9 of its 12 layers stop at 511 positions. Together that's
-11.8 MB, 6.4× smaller.
+11.8 MB, 6.4x smaller.
 
 ### What limits generation speed
 
 Horace He's [*Making Deep Learning Go Brrrr*](https://horace.io/brrr_intro.html) [[12]](#ref-12) sorts GPU time by what the chip is waiting on:
 
-- **Compute:** the chip is busy doing arithmetic.
+- **Compute:** matrix multiplications and element-wise operations.
 - **Memory bandwidth:** it's waiting for data to arrive from memory.
 - **Overhead:** it's waiting for the next instruction. That covers launching kernels, Python, and moving small
   tensors around.
@@ -84,24 +84,24 @@ Which of these dominates decides whether a smaller KV cache makes a model faster
 happens in two phases, prefill and decode, and each runs into a different limit.
 
 **Prefill** reads the prompt: every prompt token goes through the model in one forward pass, and their keys and values
-are *written* to the cache. With enough tokens that's large matrix multiplications, so prefill leans towards
-*compute*, so its speed depends on arithmetic more than on cache size. Model B does 9% less arithmetic per token than Model A ([Part 1, "Counting FLOPs"](/gpt2-to-gemma-part-1/#counting-flops)).
+are *written* to the cache. With enough tokens (many batches and long context length), that's large matrix multiplications, so prefill leans towards
+*compute*. Its speed depends on number of FLOPs more than on cache size. Model B does 9% less FLOPs per token than Model A ([Part 1, "Counting FLOPs"](/gpt2-to-gemma-part-1/#counting-flops)).
 
-**Decode** generates the answer one token per step. Each step does very little arithmetic, but it has to read every
-weight and every sequence's whole cache. For a large model that makes decode *memory-bound*, which is exactly where a
-smaller cache pays off. For a small model there is another cost: each step also pays a fixed cost to launch a few hundred
+**Decode** generates the answer one token per step. So each step does very little math, but it has to read every
+weight and every sequence's whole cache. For a large model that makes decode *memory-bound*, which is where a
+smaller cache pays off. For a small model there is overhead cost: each step  pays a fixed cost to launch a few hundred
 small kernels, one per operation per layer. If that fixed cost is bigger than the time spent moving data, decode is
 *overhead-bound*, and the cache size barely matters.
 
-If you've used an LLM API with "cache write" and "cache read", it's the same split: prefill writes the KV cache,
+If you've used an LLM API with "cache write" and "cache read", that is when prefill writes the KV cache and
 decode reads it.
 
 ### Mac vs H100
 
 I ran the same benchmark on my M1 Pro MacBook (16-core GPU, 16 GB of unified memory, 200 GB/s memory bandwidth) and on
-one H100 (3.35 TB/s), both in float32 (the model checkpoints' precision), taking the median of repeated runs after warm-up. Each generation run starts from a
+one H100 SXM (80 GB of HBM3 memory, 3.35 TB/s memory bandwidth), both in float32 (the model checkpoints' precision), taking the median of repeated runs after warm-up. Each generation run starts from a
 prompt of random token IDs and produces 256 new tokens, always
-picking the most likely next one. The choice of random token generation is because what the prompt says doesn't change the speed of generation, so specific coherent text here does not change the measurement. 
+picking the most likely next one. I used random tokens because the content of a prompt doesn't affect how fast the model generates.
 
 | | Model A | Model B | B vs A |
 |---|---|---|---|
@@ -111,64 +111,65 @@ picking the most likely next one. The choice of random token generation is becau
 | **H100:** decode with cache, batch 8, 512-token prompt | 1,988 tok/s | 1,290 tok/s | **0.65×** |
 | **H100:** prefill, batch 8, 1024 tokens | 212k tok/s | 194k tok/s | 0.92× |
 
-At 1024 tokens, prefill behaves the same on both machines: B is 8–10% slower, in line with Part 1's training slowdown. On the H100, short single-sequence prompts are even slower, because they are overhead-bound. The two machines differ substantially in decoding speed. The time per decode step shows why:
+At 1024 tokens, compute-heavy prefill behaves the same on both machines: B is 8–10% slower, in line with Part 1's training slowdown. On the H100, short batch $$B=1$$ prompts are even slower, because they are overhead-bound. The two machines differ substantially in decoding speed. The time per decode step shows why:
 
 ![Decode step time against megabytes read per step, on each machine](/assets/s1/efficiency/figures/decode_regimes.png)
 
 
-**How to read it.** I benchmarked four settings per model: one sequence or a batch of eight (batch 1 or 8), each
+**Understanding the plots above:** I benchmarked four settings per model: a batch of 1 or 8, each
 generating after a 128-token or a 512-token prompt. That's why each line has four points. The x-axis is how much data
 one decode step reads from memory: all the model's weights, read once and shared by the batch, plus the KV cache of
-every sequence in the batch. A bigger batch or a longer prompt means more cache, so the point moves right. The y-axis
-is how long one step takes.
+every sequence in the batch. A bigger batch or a longer sequence means more cache, so the point moves right. The y-axis
+shows how long one step takes.
 
-**On the Mac, step time rises with the data read.** Model A's step time climbs from about 10 ms to 27 ms as the data
-read per step grows from about 520 to 875 MB. Across all eight points of both models, the megabytes read alone
-explain 84% of the variation in step time. This is what memory-bound looks like: each step mostly waits for the
-weights and the cache to arrive. Model B reads less cache per step, so its points sit further left. It's faster than
+**On the Mac (the left plot), step time rises with the data read.** Model A's step time climbs from about 10 ms to 27 ms as the data
+read per step grows from about 520 to 875 MB. Across all eight points of both models, the MB read during decoding
+explains the variation in step time. This is what memory-bound looks like: each step mostly waits for the
+weights and the cache to arrive. Model B reads less cache per step, so its points sit kind-of-clustered and further left on the x-axis compared to A's. It's faster than
 Model A in every setting except the smallest one (batch 1, 128-token prompt), where both caches are tiny, and its lead
 grows with the batch.
 
 
-**On the H100, step time is flat.** Model A takes 3.8–4.0 ms per step and Model B 6.1–6.3 ms, whatever the batch
+**On the H100 (the right plot), step time is flat.** Model A takes 3.8–4.0 ms per step and Model B 6.1–6.3 ms, whatever the batch
 and prompt length. The data read barely matters here: at the H100's 3.35 TB/s, reading 460–880 MB takes only
 0.14–0.26 ms. The rest of each step is overhead. A decode step runs a few hundred small GPU operations (kernels), and
 launching each one costs a few microseconds, which adds up to milliseconds. Model B runs more of them per block: two
 extra normalizations, the gating multiply in its MLP, the rotations and the local-window masks. So on the H100 it's
 slower, and its smaller cache does not help it win in speed.
 
-The next figure shows how much the cache itself speeds up generation, on the Mac. In the two left panels, each
+The next figure shows how much the cache itself speeds up generation (throughput), on the Mac M1 Pro. In the two left panels, each
 model has a light bar (generating without the cache, recomputing every earlier token at each step) and a dark bar
-(with the cache), and the label above the dark bar is the speed-up. The right panel is prefill at batch 8, where the
+(with the cache), and the label above the dark bar is the speed-up. The right panel is prefill throughput (tokens/s) at batch 8, where the
 cache plays no part.
 
 ![Generation speed with and without the cache, and prefill speed, on the Mac](/assets/s1/efficiency/figures/inference_speed.png)
 
 On the Mac, the cache speeds up generation 2.5–5.3× at batch 1 and 8–23× at batch 8,
-because recomputing the whole sequence every step is a lot of extra work. On the H100 (not in the figure), at batch 1 with a short prompt,
-the cache gives no speed-up at all (0.9–1.0×), because recomputing 128 tokens costs no more launch overhead than
-processing one. Its benefit only appears with longer prompts and bigger batches (up to 6.3× for Model A at batch 8).
+because recomputing the whole sequence every step is a lot of extra work. 
+
+On the H100 (not in the figure), at batch 1 with a short prompt,
+the cache gives no speed-up at all (0.9–1.0×), because recomputing 128 tokens costs similar launch overhead than
+processing one. The cache benefit appears only with longer prompts and bigger batches (up to 6.3× for Model A at batch 8).
 
 ![KV-cache memory as the context grows](/assets/s1/efficiency/figures/kv_cache.png)
 
-The memory plot shows the two savings separately. Model B's line rises a quarter as steeply as Model A's (GQA), and
-flattens past 512 tokens, where its local layers stop adding to the cache (the windows). The measured sizes (dots)
-match the KV cache formula  from
-[What a KV cache stores](#what-a-kv-cache-stores) (lines) exactly, on both machines.
+The memory plot above shows the two savings separately. Model B's line rises 1/4-th as steeply as Model A's (GQA), and
+flattens past 512 tokens, where its local layers stop adding to the cache due to windowed attention. The measured sizes (dots)
+match the KV cache formula from
+[previous section](#what-a-kv-cache-stores) (lines) exactly, on both machines.
 
 
-So when would the H100 result flip? Model A spends about 4 ms of each step on
-overhead. In 4 ms, the H100 can read 3.35 TB/s × 0.004 s ≈ 13 GB. So for reading the cache to take as long as the
+When would the H100 result flip? Model A spends about 4 ms of each step on
+overhead. In 4 ms, at its peak bandwidth, the H100 can read 3.35 TB/s × 0.004 s ≈ 13 GB. A full 1024-token sequence takes 75.5 MB of Model A's float32 cache. So for reading the cache to take as long as the
 overhead, a step would have to read about 13 GB of cache: 13.4 GB / 75.5 MB ≈ 177 full-length sequences of Model A's
-float32 cache at once. Real serving systems work at
-that scale: large batches, long contexts, bigger models, and CUDA graphs and kernel fusion that cut the per-step
-overhead. 
+float32 cache at once. Real serving systems reach the scale where overhead is no longer the bottleneck, using large batches,
+long contexts and bigger models, and they also cut the per-step overhead with CUDA graphs and kernel fusion. 
 
 ### The KV cache of a larger model
 
-Arithmetic intensity, the FLOPs done per byte read (covered in
+Arithmetic intensity, the FLOPs done per byte read, tells which part of decoding can ever become compute-bound. A great reference to check out in this regard is 
 CS336's lectures on [resource accounting](https://cs336.stanford.edu/lectures/?trace=lecture_02) and
-[inference](https://cs336.stanford.edu/lectures/?trace=lecture_10)), tells which part of decoding can ever become compute-bound. For the
+[inference](https://cs336.stanford.edu/lectures/?trace=lecture_10). For the
 weights, each parameter read in bf16 (2 bytes) is used for 2 FLOPs per sequence in the batch, so the intensity is
 about the batch size. An H100 does about 295 bf16 FLOPs per byte it can read, so decode only becomes compute-bound
 for the weights at batches of a few hundred sequences. Attention over the cache is different. Each cached key and
@@ -176,7 +177,7 @@ value is read for one sequence only, and is used by every query head that shares
 That gives an intensity of 1 FLOP per byte for Model A and 4 for Model B. Reading the cache is memory-bound at any scale,
 and GQA's task is to multiply that intensity by the number of query heads per key/value head.
 
-The same formula from [What a KV cache stores](#what-a-kv-cache-stores) gives the KV
+The same formula from ['What a KV cache stores'](#what-a-kv-cache-stores) section gives the KV
 cache per sequence of, let's say, a 7B-class model (32 layers, $$d_{model}$$ = 4096, 32 heads of size 128) in bf16:
 
 | Context | Full multi-head attention | GQA (8 KV heads) | GQA + Gemma 3-style local windows |
@@ -185,12 +186,10 @@ cache per sequence of, let's say, a 7B-class model (32 layers, $$d_{model}$$ = 4
 | 32k tokens | 17.2 GB | 4.3 GB | 0.91 GB |
 | 128k tokens | 68.7 GB | 17.2 GB | 3.3 GB |
 
-At 32k tokens, one sequence's full-attention cache would fill a fifth of an 80 GB H100. The Gemma 3-style layout fits
+At 32k tokens, one sequence's full-attention cache would fill 1/5-th of an 80 GB H100. The Gemma 3-style layout fits
 nearly twenty sequences in the same space. Overhead stops dominating too: reading a 7B model's bf16 weights alone
-takes about 4 ms per decode step at 3.35 TB/s (7B parameters × 2 bytes = 14 GB, and 14 GB / 3.35 TB/s ≈ 4.2 ms), as long as
-the whole fixed overhead measured here. That's the regime
-the Gemma 3 design targets, where a 6.4× smaller cache means 6.4× more sequences in the same GPU memory (the H100's
-80 GB of HBM, high-bandwidth memory). At that scale the Mac
+takes about 4 ms per decode step at 3.35 TB/s (7B parameters × 2 bytes = 14 GB, and 14 GB / 3.35 TB/s ≈ 4.2 ms). That's the regime
+the Gemma 3-style architecture targets, where a 6.4x smaller cache means serving 6.4x more sequences in the same GPU memory. At that scale the Mac
 result, where the smaller cache made decoding faster, is the one that carries over to the H100.
 
 ## FLOPs at long contexts
@@ -242,24 +241,22 @@ appendix ([Attention and FlashAttention](#attention-and-flashattention)) works t
 
 The two models end with the same loss, but they use very different mechanism for the one thing a
 transformer can't know by itself: where each token sits in the sequence. Model A learns a vector for every position
-from scratch. Model B is supplied the position through a fixed rotation. Below, I look at what each one actually learns.
+from scratch. Model B is supplied the position through a fixed rotation. Below, I share how each model handles position information.
 
 ### RoPE as 32 clocks
 
-RoPE [[1]](#ref-1) splits our 64-dimensional attention head (each
-layer splits the 768 dimensions of its queries and keys across 12 heads, so a head gets 768 / 12 = 64) into 32 pairs of dimensions and rotates each pair by an angle
-proportional to the token's position. Each pair turns at its own speed. The fastest completes a full turn every 6
-positions. The slowest would need 47,000 positions to complete one. When a query and a key score attention, only the
+Each
+layer splits the 768 hidden (embedding) dimensions of its queries and keys across 12 heads, so a head gets 768 / 12 = 64 hidden dimensions. RoPE [[1]](#ref-1) splits our 64-dimensional attention head into 32 pairs and rotates each pair by an angle
+proportional to the token's position. Each pair turns at its own speed. When a query and a key score attention, only the
 *difference* of their angles survives, so attention depends only on how far apart two tokens are. Here is a mental model that helps me build intuition about RoPE: each attention head reads the distance between two tokens off a set of 32 clocks running at different speeds.
 
-Where do 6 and 47,000 come from? Counting bands from 1, band $$j$$ turns by $$\theta_j = 10000^{-2(j-1)/64}$$ radians per
-position, where 10,000 is RoPE's base. The fastest band, $$j = 1$$, turns 1 radian per position, so a full turn
-of $$2\pi$$ radians takes about 6.3 positions. The slowest, $$j = 32$$, turns $$10000^{-62/64} \approx 1/7500$$ radians
-per position, so a full turn takes $$2\pi \times 7500 \approx 47{,}000$$ positions.
+Here is the simple math behind the wavelengths of the fastest and slowest bands. Counting bands from 1, band $$j$$ turns by $$\theta_j = 10000^{-2(j-1)/64}$$ radians per
+position, where 10,000 is RoPE's base and wavelength, the number of positions for one full turn, is $$2\pi/\theta_j$$. The fastest band, $$j = 1$$, turns 1 radian per position, so a full turn takes $$2\pi \approx 6.3$$ positions. The slowest, $$j = 32$$, turns $$10000^{-62/64} \approx 1/7500$$ radians
+per position, so a full turn takes $$2\pi \times 7500 \approx 47000$$ positions.
 
 ![Wavelength of each RoPE band against the 1024-token training context](/assets/s1/positions/figures/rope_bands.png)
 
-Only 18 of the 32 clocks complete a full turn within the 1024-token training context. The other 14 never do: during
+As shown in the plot above, only 18 of the 32 clocks complete a full turn within the 1024-token training context. The other 14 never do so during
 training, the model only ever sees a fraction of their cycle. At 1024 tokens it is harmless but it becomes a
 problem when the model reads longer inputs. I will show how YaRN fixes this, later in this article.
 
@@ -282,24 +279,24 @@ their dot product is $$\mathrm{Re}[a\,\bar{b}]$$, where $$\bar{b}$$ is the compl
 $$\frac{1}{\sqrt{h}}\,\mathrm{Re}\Big[\, z_j^q(m)\,e^{\mathrm{i} m \theta_j} \cdot \overline{z_j^k(n)\,e^{\mathrm{i} n \theta_j}} \,\Big]
 = \frac{1}{\sqrt{h}}\,\mathrm{Re}\Big[\, z_j^q(m)\,\overline{z_j^k(n)} \; e^{\,\mathrm{i} (m-n)\,\theta_j} \Big]$$
 
-because the conjugate of $$e^{\mathrm{i} n\theta_j}$$ is $$e^{-\mathrm{i} n\theta_j}$$, so the two rotations combine into one. **Only the difference $$\Delta = m - n$$ survives.** This is what makes RoPE relative.
+where the two $$(q,k)$$ rotations combine into one. **Only the difference $$\Delta = m - n$$ survives.** This is what makes RoPE relative.
 
 **Step 3: separate content from position.** The product $$c_j = z_j^q(m)\,\overline{z_j^k(n)}$$ depends only on what the
-query and key vectors contain before rotation. Write it as a size and an angle, $$c_j = |c_j|\,e^{\mathrm{i}\varphi_j}$$. Summing
+query and key vectors contain before rotation. Writing it as amplitude and an angle, $$c_j = |c_j|\,e^{\mathrm{i}\varphi_j}$$ and summing
 over the 32 bands gives the whole score:
 
 $$\text{score}(\Delta) = \frac{1}{\sqrt{h}} \sum_{j=1}^{32} |c_j| \cos\!\big(\Delta\,\theta_j + \varphi_j\big)$$
 
 
-This attention score can be interpreted as a sum of 32 waves, each a function of the distance $$\Delta$$ between two tokens. **The waves' frequencies are fixed by RoPE. How much of each wave a head uses (amplitude), and where each wave
-peaks (phase), are set by content**, through the query and key weights the head has learned. So each head builds its own
+This attention score can be interpreted as a sum of 32 waves, each a function of the distance $$\Delta$$ between two tokens. **The waves' frequencies $$\theta_j$$ are fixed by RoPE. How much of each wave a head uses (amplitude $$|c_j|$$), and where each wave
+peaks (phase $$\varphi_j$$), are set by content**, through the query and key weights the head has learned. So each head builds its own
 preference for distance by mixing fixed waves, a bit like an equaliser setting the volume of fixed
 frequency bands.
 
 A head can choose how it treats distance. Fast waves give a sharp preference for nearby
 tokens. Middle waves give a smooth fade over tens to hundreds of tokens. Slow waves never complete a turn within the context, so they
-change very little between a key 10 tokens away and one 900 tokens away. They add roughly the same amount to the score
-at every distance, and a head built on them decides mostly on *what* the tokens are.
+change very little between a key 10 tokens away vs one 900 tokens away. They add roughly the same amount to the score
+at every distance.
 
 Do Model B's trained heads actually split like this? To check, I grouped the bands the way the YaRN paper [[3]](#ref-3) does,
 by counting how many full turns each band makes within the 1024-token training context:
@@ -308,52 +305,46 @@ by counting how many full turns each band makes within the 1024-token training c
 - **Middle bands** make between 1 and 32 turns (12 bands).
 - **Slow bands** never complete a single turn (the other 14).
 
-The [heatmap below](#fig-band-usage) answers this from the trained weights alone. A head can only use a band as much as its query and
-key projections feed that band's pair of dimensions. The head's **q·k weight** in band $$j$$ is the size of the query and
-key projection rows that feed band $$j$$, multiplied together, as a share of the head's total. Its **slow-band weight** sums
-that share over the 14 slow bands; a head that treated every band alike would get 14/32, or 44%. (The derivation is in the
-appendix, [How the band measures are computed](#how-the-band-measures-are-computed).)
+The heatmap below answers this from the trained weights:
 
 <span id="fig-band-usage"></span>
 ![Which RoPE bands each of Model B's 144 heads uses, measured from the trained weights](/assets/s1/positions/figures/band_usage.png)
 
-The heatmap comes from the trained weights alone: no text goes through the model and nothing is generated. Each
-cell is one head's q·k weight in one band, as defined above. It measures how strongly the head's query and key
-projections feed that band, which caps how much the head can use it on any input.
+Each row is one head (12 per layer, 12 layers) and each column one band, fastest on the left. Each
+cell is one head's $$**q·k**$$ weight in one band. The head's **q·k weight** in band $$j$$ is the size of the query and
+key projection rows that feed band $$j$$ which caps how much the head can use it on any input. Darker means more of
+that head's $$q·k$$ weight. The derivation is in the
+appendix, [How the band measures are computed](#how-the-band-measures-are-computed).
 
-Each row is one head (12 per layer, 12 layers) and each column one band, fastest on the left. Darker means more of
-that head's $$q·k$$ weight. The dashed line separates the bands that turn within the context from the slow ones. The
-pattern leans toward the slow bands on the right:
+The
+pattern leans toward the slow bands on the right. Its **slow-band weight** sums
+that share over the 14 slow bands:
 
 - **Overall:** the median slow-band weight is 53%, against 44% for an even spread.
 - **Five heads have a slow-band weight above 75%:** one in layer 1, three in layer 6 and one in layer 8. They're the
   dark stripes on the right.
 - **No head concentrates on the fast bands.** The lowest slow-band weights, mostly in layer 0, sit at or just below the 44%
-  of an even spread (lowest 42%).
+  of an even spread.
 
 This matches what Barbero et al. (2025) [[2]](#ref-2) found in a much larger Gemma model: a strong preference for the lowest
-frequencies, which they read as carrying meaning, and the highest frequencies used for positional patterns.
+frequencies slow bands, which they interpret as carrying meaning, and the highest frequencies fast bands used for positional patterns.
 
-The weights only show what a head *can* use. The [second figure](#fig-real-heads) shows what it *does* use on real text. It runs held-out
-FineWeb-Edu through Model B and, for three heads, averages the pre-softmax score $$q·k/\sqrt{h}$$ over every query–key pair the
-same distance apart, so higher means the head prefers keys at that distance.
-
-Using the complex form from the derivation above, that average score splits exactly into one contribution per
-band (formula in the appendix). The figure's bottom row is the head's mean score at each distance, and the top
+The weights only show what a head *can* use. The [figure](#fig-real-heads) below shows what it *does* use on real text. I ran held-out
+FineWeb-Edu through Model B for three heads, averaging the pre-softmax score $$q·k/\sqrt{h}$$ over every query–key pair the
+same distance apart. Using the complex form from the derivation above, that average score splits exactly into one contribution per
+band (formula in the [appendix](#how-the-band-measures-are-computed)). The figure's bottom row is the head's mean score at each distance, and the top
 row sums the bands' contributions within each speed group: fast, middle and slow.
 
 <span id="fig-real-heads"></span>
 ![Three real Model B heads: average attention score vs distance, and the contribution of fast, middle and slow bands](/assets/s1/positions/figures/real_heads.png)
 
-**How to read it.** Each column is one real head, chosen from the heatmap:
+Each column in the above plot is one real head, chosen from the heatmap:
 
 - the highest slow-band weight (layer 6, head 11, 84%);
 - the median (layer 9, head 1, 53%);
 - the lowest (layer 0, head 6, 42%).
 
-Panel titles mark global or local layers; local heads' curves stop at $$W = 512$$.
-
-Each head matches one of the behaviours described earlier:
+Panel titles mark global or local layers; local heads' curves stop at $$W = 512$$. Each head matches one of the behaviours described earlier:
 
 - **Layer 0, head 6 is sharply local.** Its score halves from distance 0 to distance 1 and keeps falling. That first
   drop is spread across all three speed groups.
@@ -361,24 +352,45 @@ Each head matches one of the behaviours described earlier:
 - **Layer 6, head 11 barely cares about distance** beyond its immediate neighbours: its score is nearly flat from 3
   tokens out to the edge of its 512-token window, and its fast bands contribute nothing at all.
 
-One caution when reading these curves: they mix two things, RoPE's rotations and the fact that nearby tokens tend to be
+One point to note in these plots, they mix two things, RoPE's rotations and the fact that nearby tokens tend to be
 similar in content. The steep drop over the first few tokens in the slow bands, in layer 6's head and layer 0's, can't
-come from rotation, since those bands barely turn in a few tokens. It's content: a query matching keys from its own
+come from rotation, since those bands barely turn in a few tokens. It comes from content, that is a query matching keys from its own
 neighbourhood. The flat stretch beyond that is where the slow bands' indifference to position shows.
 
 ### Model A's learned position table
 
-Model A's position table is just 1024 free vectors; nothing in its design says anything about distance, smoothness
-or waves. Still, training gives it structure. Model B has no such table, since RoPE rotates queries and keys instead
-of adding a vector to each token, but one thing can be compared directly: how similar two positions look as a
+Model A's position table is just 1024 learnt vectors of $$d=768$$ dimension each. By its design, there is no encoding about distance, smoothness
+or waves information. But training gives it structure. Model B has no such table, since RoPE rotates queries and keys instead
+of adding a vector to each token. But one thing can be compared directly between the two models: how similar two positions look as a
 function of their distance.
+
+The plot below captures the
+cosine similarity between the position vectors $$p_m$$ and $$p_n$$ at positions $$m$$ and $$n $$ (0 to 1023):
+
+$$\text{sim}(m, n) = \frac{p_m \cdot p_n}{\lVert p_m \rVert \, \lVert p_n \rVert}$$
+
+It is 1 when two positions get vectors pointing the same way, 0 when they are unrelated and negative when they point
+apart. For RoPE, rotating the same vector to positions $$m$$ and $$n$$ and comparing gives $$\frac{1}{32}\sum_{j=1}^{32} \cos\big((m-n)\,\theta_j\big)$$ when every band carries equal weight, which depends only on
+the distance $$m - n$$.
 
 ![Position as waves: Model A's learned table, compared with Model B's RoPE](/assets/s1/positions/figures/learned_positions.png)
 
-**Left: Model A's position vectors, every one compared with every other.** The bright diagonal band says nearby
-positions have similar vectors, and the similarity fades with distance. Distance alone explains 71% of the variation
-in this matrix. The model has learned something close to "position as distance", the very property RoPE builds in. Wang & Chen (2020)
-[[16]](#ref-16) found the same kind of structure in the learned position embeddings of pretrained models, GPT-2 among them.
+**Left: Model A's position similarity.** The diagonal itself is always 1, since each vector is compared with itself.
+Training adds is the bright band around it where nearby positions have similar vectors, and the similarity fades with
+distance. An untrained table of random vectors would show only the diagonal, with similarities near 0 everywhere else.
+ To check how much of this pattern comes from distance alone, I first average the similarity over all position pairs the same distance $$\Delta$$ apart:
+
+$$\bar{s}(\Delta) = \underset{|m-n| = \Delta}{\text{mean}} \; \text{sim}(m, n)$$
+
+If similarity depended on distance and nothing else, every entry would equal $$\bar{s}(|m-n|)$$. The $$R^2$$ measures
+how close the real matrix comes to that:
+
+$$R^2 = 1 - \frac{\sum_{m,n} \big(\text{sim}(m, n) - \bar{s}(|m-n|)\big)^2}{\sum_{m,n} \big(\text{sim}(m, n) - \overline{\text{sim}}\big)^2}$$
+
+The top sum is what distance fails to explain, entry by entry. The bottom sum is the matrix's total variation around
+its overall mean $$\overline{\text{sim}}$$. $$R^2 = 1$$ would mean distance explains everything, and 0 that it explains
+nothing. For Model A's table, $$R^2 = 0.71$$: distance alone explains 71% of the variation. The model has learned something close to "position as distance", the property RoPE builds in. Wang & Chen (2020)
+[[16]](#ref-16) found the same kind of structure in the learned position embeddings of pretrained models.
 
 **Middle: the three directions along which Model A's position vectors vary most**, plotted against position.
 They're smooth waves: half a cycle, a full cycle, about one and a half. This is expected: when similarity
