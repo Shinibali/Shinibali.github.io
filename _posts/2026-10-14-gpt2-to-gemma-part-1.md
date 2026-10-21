@@ -609,12 +609,13 @@ Platforms and tools I used:
 
 ### Counting the FLOPs
 
-The forward FLOPs per token, from applying the $$2mn$$ rule to every matrix multiplication in a layer: the linear projections and the attention computation itself.
+The forward FLOPs per token, from applying the $$2mn$$ rule to every matrix multiplication in a layer: the linear projections and the attention computation itself. Multiplying an $$m$$-dimensional vector by an $$m × n$$ matrix costs $$2mn$$ FLOPs, one multiply and one add per weight. Everything else (biases, normalization, activations, softmax, RoPE's rotations, residual additions, the embedding lookup and the loss) is left out, since together it comes to under 1% of the FLOPs.
 
 | Symbol | Meaning | Model A | Model B |
 |---|---|---|---|
 | $$d$$ | model dimension ($$d_{model}$$): the size of each token's vector | 768 | 768 |
 | $$L$$ | layers (global + local) | 12 (12 + 0) | 12 (3 + 9) |
+| $$L_{\text{global}}, L_{\text{local}}$$ | global layers, local layers | 12, 0 | 3, 9 |
 | $$n_h, n_{kv}$$ | query heads, key/value heads | 12, 12 | 12, 3 |
 | $$h = d / n_h$$ | head size | 64 | 64 |
 | $$T$$ | context length | 1024 | 1024 |
@@ -632,10 +633,14 @@ Per layer, per token:
 
 Here $$k̄$$ is the number of keys a query sees, averaged over positions. With causal masking, position $$p$$ sees $$p + 1$$
 keys, so a global layer averages $$(T + 1)/2$$. A local layer ramps up to $$W$$ keys and then stays there, so $$k̄_W = [W(W + 1)/2 + (T − W)·W] / T$$.
+For each key it sees, a query does two length-$$d$$ operations across its heads: the dot product $$q·k$$ ($$d$$
+multiplies and $$d$$ adds, so $$2d$$ FLOPs) and adding that key's weighted value to the output (another $$2d$$), so
+attention costs $$4d$$ FLOPs per key. GQA doesn't change this, since every query head still does its own dot products.
+Summed over a whole sequence, this per-token cost becomes attention's familiar quadratic; [Part 2's appendix](https://shinibali.github.io/gpt2-to-gemma-part-2/#attention-and-flashattention) works that out, along with what FlashAttention and local windows change at long contexts.
 
 Once per token, the output layer adds $$2dV$$ FLOPs.
 
-Adding it up:
+Adding it up, the weight matrices cost $$6d^2 + 2d^2 + 16d^2 = 24d^2$$ per layer in Model A and $$3d^2 + 2d^2 + 16d^2 = 21d^2$$ in Model B:
 
 $$F_A = L\,\big(24d^2 + 2d(T+1)\big) + 2dV$$
 

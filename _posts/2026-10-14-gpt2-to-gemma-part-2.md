@@ -375,117 +375,114 @@ the distance $$m - n$$.
 
 ![Position as waves: Model A's learned table, compared with Model B's RoPE](/assets/s1/positions/figures/learned_positions.png)
 
-**Left: Model A's position similarity.** The diagonal itself is always 1, since each vector is compared with itself.
-Training adds is the bright band around it where nearby positions have similar vectors, and the similarity fades with
+**Left plot above: Model A's position similarity.** The diagonal itself is always 1, since each vector is compared with itself.
+Training adds the bright band around it where nearby positions have similar vectors, and the similarity fades with
 distance. An untrained table of random vectors would show only the diagonal, with similarities near 0 everywhere else.
  To check how much of this pattern comes from distance alone, I first average the similarity over all position pairs the same distance $$\Delta$$ apart:
 
-$$\bar{s}(\Delta) = \underset{|m-n| = \Delta}{\text{mean}} \; \text{sim}(m, n)$$
+$$\bar{s}(\Delta) = \underset{|m-n| = \Delta}{\text{Avg}} \; (\text{sim}(m, n))$$
 
-If similarity depended on distance and nothing else, every entry would equal $$\bar{s}(|m-n|)$$. The $$R^2$$ measures
+If similarity depended on distance and nothing else, every entry would equal $$\bar{s}(|m-n|)$$. [Coefficient of determination $$R^2$$ ](https://en.wikipedia.org/wiki/Coefficient_of_determination) measures
 how close the real matrix comes to that:
 
 $$R^2 = 1 - \frac{\sum_{m,n} \big(\text{sim}(m, n) - \bar{s}(|m-n|)\big)^2}{\sum_{m,n} \big(\text{sim}(m, n) - \overline{\text{sim}}\big)^2}$$
 
-The top sum is what distance fails to explain, entry by entry. The bottom sum is the matrix's total variation around
-its overall mean $$\overline{\text{sim}}$$. $$R^2 = 1$$ would mean distance explains everything, and 0 that it explains
-nothing. For Model A's table, $$R^2 = 0.71$$: distance alone explains 71% of the variation. The model has learned something close to "position as distance", the property RoPE builds in. Wang & Chen (2020)
+The top residual sum of squares is what distance fails to explain, entry by entry. The bottom total sum of squares is the matrix's total variation around
+its overall mean $$\overline{\text{sim}}$$. $$R^2 = 1$$ would mean **distance** explains everything as $$\bar{s}(|m-n|)$$ equals $$\text{sim}(m, n)$$, and 0 means it explains
+nothing. For Model A's table, $$R^2 = 0.71$$ means distance explains 71% of the variation. Model A has learned something close to "position as distance", a property RoPE builds in algorithmically in Model B. Wang & Chen (2020)
 [[16]](#ref-16) found the same kind of structure in the learned position embeddings of pretrained models.
 
-**Middle: the three directions along which Model A's position vectors vary most**, plotted against position.
-They're smooth waves: half a cycle, a full cycle, about one and a half. This is expected: when similarity
-depends only on distance, the matrix's eigenvectors are close to sinusoids, the same mathematics as a Fourier transform.
+**Middle plot above: the top three directions (principal components) along which Model A's position vectors vary most**, plotted against position.
+Each curve shows how far each position's vector reaches along one of those directions. The curves are smooth
+waves of half a cycle, a full cycle and about one and a half. That's what distance-based similarity predicts: the
+principal components are the eigenvectors of the matrix of dot products between positions, and when that matrix depends
+only on distance, its eigenvectors are close to sinusoidal waves.
 
-**Right: similarity against distance, for both models.** For RoPE, rotate any vector to two positions and
-compare: the result is a sum of cosines of the distance, one per band, so it depends on distance alone by
-construction. (The curve gives every band equal weight, which is position alone, before a head's content decides
-which bands matter.) The two curves have opposite shapes:
+**Right plot above: similarity against distance, for both models.** For RoPE, rotate any vector to two positions and
+compare: band $$j$$'s two copies end up $$\Delta\,\theta_j$$ apart in angle, so each band contributes $$\cos(\Delta\,\theta_j)$$,
+with $$\theta_j$$ its frequency from [RoPE as 32 clocks](#rope-as-32-clocks). Giving every band equal weight, the plotted curve is
 
-- **RoPE is sharp up close and blurry far away.** Its similarity falls from 1.0 to 0.66 within 10 positions, as the
+$$\text{sim}_{\text{RoPE}}(\Delta) = \frac{1}{32}\sum_{j=1}^{32} \cos(\Delta\,\theta_j),$$
+
+which depends on distance alone by construction. Equal weights show position alone, before a head's content decides
+which bands matter. The RoPE curve is jagged because it is an exact sum of the 32 cosines at each whole-number distance. Model A (blue line) is
+smooth because it averages every pair of positions at that distance. Model A's shaded blue band, the middle 80% of those
+pairs, shows that its similarity also depends on *where* in the window a pair sits. RoPE has no band, because every
+pair at the same distance gets exactly the same value. Additionally:
+
+- **RoPE is sharp for neighboring tokens and blurs out as inter-token distance grows.** Its similarity falls from 1.0 to 0.66 within 10 positions, as the
   fast bands lose alignment, and then drifts slowly down, to about 0.2 by the end of the window, held up by the slow bands that barely turn. Nearby
   positions are easy to tell apart, while distances of 600 and 900 tokens look much alike.
 - **Model A's table is blurry up close and coarse-grained far away.** Its similarity is still 0.91 at distance 10.
   Neighbouring positions get nearly the same vector, but by 500 positions apart the similarity turns negative: the
   table mostly encodes *roughly where in the window* a token sits.
 
-The RoPE curve is jagged because it's exact, the sum of the 32 cosines at each whole-number distance; Model A's is
-smooth because it averages every pair of positions at that distance. Model A's shaded band, the middle 80% of those
-pairs, shows that its similarity also depends on *where* in the window a pair sits; RoPE has no band, because every
-pair at the same distance gets exactly the same value.
-
-Breaking Model A's table into waves along the position axis (a Fourier transform) shows the same thing: two-thirds of its
-variation sits in a handful of slow waves, 341 positions and longer, and most of the rest, about 22%, is a flat,
-noise-like floor at short wavelengths. RoPE puts structured waves there, from 6 positions up, and keeps 14
-bands slower than the whole window, which a table of 1024 rows can't represent at all.
-
-That's one plausible reason RoPE was the one change in Part 1's ladder that improved loss, and it's why YaRN, later in this
-article, has slow bands to rescale.
+RoPE's sharp view of nearby positions is one plausible reason it was the one change in Part 1's ladder rungs that improved
+loss. Its slow bands, which barely turn within the window, are what YaRN rescales later in this article.
 
 ### Position at longer contexts
 
 At longer contexts, the two schemes behave very differently. Model A's position table stops at 1024 rows, so it
-can't read further at all. Building one for a 128k context in a 7B-class model would take 537M parameters, each row
+can't read further at all. For comparison, building a 128k context 7B model would take 537M parameters, each row
 trained only on the tokens that happen to land at its position. This is part of why long-context models use RoPE or another
 relative scheme instead.
 
-RoPE needs adjusting too. With the base of 10,000 used here, every one of a 128-dimensional head's 64 bands completes
-a turn within 128k tokens, so no band is slow enough to tell "far" from "very far". Long-context models raise the
-base: Llama 3 [[10]](#ref-10) uses 500,000, and Gemma 3 uses 1,000,000 on its global layers. That leaves 15 and 17 bands slower than
-the whole 128k context. Model B's windows save more and more memory as the context grows, but more and more of the
+RoPE needs adjusting too. With the RoPE base of 10,000 used for our model B, every one of a 128-dimensional head's 64 bands completes
+at least one full turn within 128k tokens; the slowest takes about 54,000 positions. A band that has turned all the way
+round gives a distant key the same angle as a near one, so no band changes steadily across the whole context to tell
+"far" from "very far". Long-context models therefore raise the base, which slows every band down: Llama 3 [[10]](#ref-10) uses 500,000, and Gemma 3 uses 1,000,000 on its global layers. That leaves 15 and 17 bands slower than
+the whole 128k context. Model B's attention windows save more and more memory as the context grows, but more and more of the
 context also lies outside them. In Gemma 3's layout, five layers in six never look beyond 1024 tokens, even at a
 128k context, so everything long-range has to travel through the global layers. This is why Gemma 3 keeps one global layer in six.
 
 ## Extending Model B's context from 1024 to 4096 with YaRN
 
-Model A can never read past 1024 tokens: its position table has no row 1025. Model B has no table, so in
+Model B has no position embedding table, so in
 principle RoPE can rotate a query to any position. In practice, a RoPE model run past its training length falls apart
-quickly. The RoPE clocks above show why: the slow bands reach angles never seen in training, and a head's mix of waves was only
+quickly. It is becuase the slow bands (seen in RoPE clocks above) reach angles never seen in training, and a head's mix of waves was only
 tuned on distances up to 1024.
 
 [YaRN](https://arxiv.org/abs/2309.00071) is a recipe for fixing this after training. It leaves the fast bands alone,
 since they already cycled many times and their behaviour at new positions is familiar. It stretches the slow bands so
-that 4096 positions map into the range of angles the model saw at 1024, blends smoothly between the two in the
-middle, and adds a small correction to the attention temperature. The paper shows it working with no training at
-all, and better with a short fine-tune on long sequences.
+that longer-context positions map into the range of angles the model saw originally, blends smoothly between the two in the
+middle, and adds a small correction to the attention temperature. The paper shows its zero-shot results hold up well to about 2x the training length and
+degrade beyond it. A short fine-tune on longer training sequences enable scaling beyond 2x without quality drop. I chose to extend Model B's context by 4x for our study and here is my two-fold reasoning motivated from the paper's findings: training data availability and zero-shot vs fine-tuned performance difference. At 2x, zero-shot YaRN results are similar to fine-tuning. At 8x, the target is beyond zero-shot range and pages that
+long are rare in our training dataset (about 1% of FineWeb-Edu validation pages reach 8k tokens, against about 3% for 4k). At 4x, there's room for the fine-tune to close the gap between zero-shot and fine-tuning. Below, we will see the results for our Model B.
 
 In terms of the fast, middle and slow bands from earlier, YaRN's default thresholds leave Model B's 6 fast bands alone, fully interpolate the 14 slow
 ones and blend the 12 in between, so 26 of the 32 bands in every head get rescaled.
 
 ![Each RoPE band's wavelength in Model B, as trained and with YaRN at 4×](/assets/s1/positions/figures/yarn_bands.png)
 
-**How to read it.** Each dot is one of Model B's 32 RoPE bands, fastest on the left. Hollow dots are the wavelengths
+Each dot is one of Model B's 32 RoPE bands, fastest on the left. Hollow dots are the wavelengths
 the model was trained with, filled dots the wavelengths YaRN gives it, and the vertical line joining them is how far
-YaRN moved that band. The two dashed lines mark the training length (1024) and the new target (4096). Purple bands
-don't move. Gold bands are stretched the full 4×, and every one of them lands above the 4096 line. Teal bands are
+YaRN moved that band. The two dashed lines mark the training length (1024) and the new target (4096). Purple (fast) bands
+don't move. Gold bands are stretched the full 4x, and every one of them lands above the 4096 line. Teal bands are
 blended, moving less the faster they are.
 
-Without YaRN, stretching the context 2×, 4× or 8× would make 3, 5 or 7 more bands complete their first full turn, at
-angles the model never saw in training: at 4096 tokens, 23 bands instead of 18. With YaRN it's 18 again: the same bands that turned within 1024 tokens during
+Without YaRN, stretching the context 2x, 4x or 8x would make 3, 5 or 7 more bands complete their first full turn, at
+angles the model never saw in training. With YaRN it's 18 bands doing at least one full turn again: the same bands that turned within 1024 tokens during
 training are the only ones that turn within 4096 now.
 
-**Why 4×.** The YaRN paper's [[3]](#ref-3) zero-shot results hold up well to about twice the training length and
-degrade beyond it; the long-context results it's known for come after a short fine-tune. At 2×, zero-shot YaRN should
-already be close, leaving the fine-tune little to show; at 8×, the target is beyond zero-shot range and pages that
-long are rare (about 1% of FineWeb-Edu validation pages reach 8k tokens, against about 3% for 4k). At 4×, there's room for the fine-tune to close the gap. Both versions are measured at 4096
-tokens.
 
-### Design choices the paper leaves open
 
-**Which layers to stretch.** Three of Model B's four layers use a 512-token local window, so they never look more
-than 511 tokens back at any context length; only the global layers ever meet a distance they weren't trained on.
+### Design choices the YaRN paper leaves open
+
+- **Which layers to stretch.** Three of Model B's four layers use a 512-token local window, so they never look more
+than 511 tokens back at any context length. Only the global layers ever meet a distance they weren't trained on.
 Released models handle this differently. Gemma 3 stretches only its global layers (and with linear
 interpolation rather than YaRN). [Rnj-1.5](https://huggingface.co/EssentialAI/rnj-1.5-instruct) and gpt-oss, both
 mixing local and global layers, apply YaRN to every layer alike. Since there's no settled convention, I followed the paper,
 Rnj-1.5 and gpt-oss: one stretched table for every layer. YaRN leaves the fast bands, which do most of a local layer's
 work, untouched anyway.
 
-**The attention temperature.** YaRN also multiplies every query and key by $$0.1\ln s + 1$$, which is 1.139 at $$s = 4$$,
+- **The attention temperature.** YaRN also multiplies every query and key by $$0.1\ln s + 1$$, which is 1.139 at $$s = 4$$,
 so attention scores grow by $$1.139^2 ≈ 1.30$$ and attention gets slightly sharper. It compensates for the squeezed slow bands
-and for having four times as many keys to spread attention over, both of which flatten attention at the new length.
-Rnj-1.5's released config turns this correction off, presumably because a long mid-training stage let the model find
-its own sharpness. Model B keeps it: zero-shot there is no training to absorb the change, and keeping the same setting
+and for having 4x as many keys to spread attention over, both of which flatten attention at the new length.
+[Rnj-1.5 blog](https://huggingface.co/EssentialAI/rnj-1.5-instruct) mentioned they turned this correction off, presumably because a long mid-training stage let the model find
+its own sharpness. I chose to keep it for  Model B because in zero-shot there is no training to absorb the change, and keeping the same setting
 in both versions means the fine-tune is the only difference between them. Folding the factor into RoPE's cosine and
-sine tables applies it to both q and k for free, which is why the paper writes it as a square root.
+sine tables applies it to both $$q$$ and $$k$$ for free.
 
 ### YaRN without any training
 
@@ -496,147 +493,146 @@ loss never depends on what comes after it.
 
 ![Perplexity against length, and loss at each position, for Model A, Model B as trained, and Model B with YaRN with and without fine-tuning](/assets/s1/positions/figures/yarn_context.png)
 
-**How to read it.** The left panel is the perplexity of a page's first $$L$$ tokens, the way the YaRN paper reports it;
-the right panel is the average loss at each position. The dashed line is the training length. Model A's line stops
-there because it has no position past 1024 to look up. The teal line is the fine-tuned model, which the next part
+The left panel is the perplexity of a page's first $$L$$ tokens, the way the YaRN paper reports it.
+The right panel is the average loss at each position. The dashed line is the original context length. Model A's line stops
+there because it has no position past 1024 to look up. The teal line is the fine-tuned model B with YaRN, which the next part
 of this section introduces.
 
-Run past its training length, plain RoPE breaks down. Its loss at each position jumps from about 3.0 to 4.2 between
-1024 and 4096, and the perplexity of the whole 4096-token page climbs to 37.7. With YaRN and no training at all, it
-stays at 23.2: 14.6 lower, with a 95% interval of [14.1, 15.1] from a paired bootstrap over the pages. So YaRN removes
-the breakdown.
-
-But it has a cost. At 1024 tokens, where the original model needed no help, YaRN costs perplexity 20.6 → 22.4: the
+Past its training length, plain RoPE breaks down. Its loss at each position jumps from about 3.0 to 4.2 between
+1024 and 4096, and the perplexity of the whole 4096-token page climbs to 37.7. With zero-shot YaRN, it
+stays at 23.2 which is 14.6 lower, with a 95% interval of [14.1, 15.1] from a paired bootstrap over the pages. So YaRN removes
+the breakdown. But it has a cost. At 1024 tokens, where the original model needed no help, zero-shot YaRN costs perplexity 20.6 → 22.4. The
 sharper attention and squeezed slow bands apply at every length, including the short ones. The right
 panel shows what happens past the training length: zero-shot YaRN's loss holds level at about where it was before 1024 (3.15
-at positions 2048–4096, against 3.13 at 512–1024), but at that slightly worse level throughout. So the model is
+at positions 2048–4096, against 3.13 at 512–1024), but at that slightly worse loss throughout. So the model is
 stable at 4096 tokens, with no gain yet from the extra context.
 
 ### Fine-tuning setup
 
-The paper fine-tuned Llama 2 7B for 400 steps of 64 × 64k-token sequences from long books (about 1.7B tokens,
-roughly 0.1% of its pretraining). Those numbers don't translate cleanly to a 124M model trained on 9.8B tokens.
+The YaRN paper fine-tuned Llama 2 7B for 400 steps of 64 × 64k-token sequences from long books (about 1.7B tokens,
+roughly 0.1% of its pretraining). Those numbers don't translate cleanly to our 113M model B trained on 9.8B tokens.
 Matching the *share* of pretraining gives about 10M tokens, about 20 of Model B's steps. Matching the *steps and
 batch* gives about 105M. There is no scaling law for how much a YaRN fine-tune needs, and the paper's learning rate
-(2e-5) says little about what a 124M model needs.
+(2e-5) says little about what a small model needs.
 
-So the fine-tune continues Model B's own training run and changes as little as
+So I chose to continue fine-tuning Model B's own training run and changed as little as
 possible:
 
-- It starts from the final checkpoint at step 20,000 with the optimizer's state restored, so AdamW's running averages
+- I started from Model B's final checkpoint (step 20,000) with the optimizer's state restored, so AdamW's running averages
   carry over.
 - The learning rate stays where the cosine schedule ended, at 6e-5, with no new warmup. A run resumed mid-schedule
   doesn't re-warm, and the restored optimizer state already matches the model.
-- Each step is still 491,520 tokens, with each micro-batch now 15 sequences of 4096 tokens instead of 60 of 1024. Weight decay, gradient
+- Each step is still 491,520 tokens as before, with each micro-batch now 15 sequences of 4096 tokens instead of previous 60 of 1024. Weight decay, gradient
   clipping, precision and seed are unchanged.
-
-What does change is the sequence length, YaRN being switched on, and the data. The pretraining stream packs pages back to back,
+- The pretraining stream packed pages back to back,
 so most 4096-token windows would join several short pages and seldom reward looking far back. The fine-tune reads
-only pages at least 4096 tokens long, one page per sequence, like the paper's long books: 3% of pages but about a
-quarter of the tokens. The model has seen these pages once already: pretraining made
+only pages at least 4096 tokens long, one page per sequence. The model has seen these pages once already. Pretraining made
 one pass over almost all of the 10B-token sample. Repeating about 1% of the data once is well within what
-[Muennighoff et al. (2023)](https://arxiv.org/abs/2305.16264) [[4]](#ref-4) found to be as good as fresh data. The evaluation pages
+[Muennighoff et al. (2023)](https://arxiv.org/abs/2305.16264) [[4]](#ref-4) found to be as good as fresh data. The evaluation data
 come from the held-out split, which the model never trained on.
 
-The run is 200 steps, about 98M tokens or 1% of pretraining, and keeps a snapshot of the weights every 25 steps.
+The fine-tuning continued for 200 steps, that is about 98M tokens or 1% of pretraining, keeps a snapshot of the weights every 25 steps and took about 23 minutes on one H100.
 Scoring each snapshot shows how many steps the fine-tune actually needs.
-
-It took about 23 minutes on one H100. The first step's gradient norm was 1.49, the first gradient the model had ever
+The first step's gradient norm was 1.49, the first gradient the model had ever
 seen from positions beyond 1024; clipping at 1.0 caught it. Within 40 steps it settled at about 0.28, close to the end
 of pretraining (about 0.25). Loss on held-out long pages went from 3.13 to 3.03, most of it in the first 50 steps.
 
 ### Results after 200 fine-tuning steps
 
 After 200 steps, the perplexity of a 4096-token page is 21.0, against 23.2 zero-shot: 2.2 lower, with a 95%
-interval of [2.1, 2.3]. The short-context cost is gone too. At 1024 tokens the fine-tuned model scores 20.5,
-against 22.4 zero-shot and 20.6 for the original model.
-
-The most useful comparison is with Model B as originally trained. The original Model B reads the first
+interval of [2.1, 2.3] (shown in the plots above). The short-context cost is gone too. At 1024 tokens the fine-tuned model scores 20.5,
+against 22.4 zero-shot and 20.6 for the original model. The most useful comparison is with original Model B. It reads the first
 1024 tokens of these pages at a perplexity of 20.6, and can't read further. The fine-tuned model reads all 4096 at
-21.0, and its loss at positions 2048–4096 (3.05) is within 0.03 of the original model's at 512–1024. So the model gets four times
+21.0, and its loss at positions 2048–4096 (3.05) is within 0.03 of the original model's at 512–1024. So the model gets 4x
 the context at nearly the same per-token quality, for 1% of the original training tokens.
 
-One caveat: the fine-tune trained on this kind of text, the opening 4096 tokens of
-long pages, so some of its gain is plain adaptation to the page type: it's better than the original even at the
-first 256 tokens (21.1 against 21.4), where position plays no part. Also, the per-position loss stays level rather
+One caveat to notice: the fine-tune trained on the kind of text that is the opening 4096 tokens of
+long pages, so some of its gain is plain adaptation to the page type. It's better than the original even at the
+first 256 tokens (21.1 against 21.4), where position plays no part. Also, the per-position loss stays flat rather
 than falling past 1024, for the fine-tuned model as for the original one within its own range. Later tokens in these
-pages aren't easier to predict, so a level curve is what a model reading the whole page should show, but it can't
-prove how much of the distant context the model actually draws on. That needs a sharper test: score the same late
-positions with the context cut back to 1024 tokens, and see how much worse they get.
+pages aren't easier to predict, so a flat curve is what a model reading the whole page should show, but it can't
+prove how much of the distant context the model actually draws on. The YaRN paper [[3]](#ref-3) checks this with
+*passkey retrieval*: it hides a random number deep inside long filler text and asks the model to repeat it, which only
+works if the model really uses context that far back. That test was beyond my experiment's budget. A cheaper check, which I
+didn't run here, would score each token near the end of a page twice: once with the whole page before it, and once with only
+the 1024 tokens just before it. If the token is predicted equally well both times, the model isn't using anything more
+than 1024 tokens back. If it does better with the whole page, it is. 
+
+What my runs do measure is how quickly the fine-tune reaches its
+final quality, which the plot below tracks step by step.
 
 ![Perplexity at 1024 and 4096 tokens against fine-tuning steps](/assets/s1/positions/figures/yarn_finetune_steps.png)
 
-**How to read it.** Each point is one snapshot of the fine-tune, scored on the same 500 pages; "zero-shot" is YaRN
-before any training. The teal line is the perplexity of the whole 4096-token page; the gold line counts only its
+In the plot above, each point is one snapshot of the fine-tune, scored on the same 500 pages. The teal line is the perplexity of the whole 4096-token page; the gold line counts only its
 first 1024 tokens, the length the model was originally trained on. Both come from the same pass over the same pages.
-The dashed line is Model B before YaRN on those same first 1024 tokens: gold above it means stretching has cost the
-model quality inside its old range, gold below it means that cost is gone.
+The dashed line is Model B before YaRN on those same first 1024 tokens. The gold line above it means stretching has cost the
+model quality inside its old range, below it means that cost is gone.
 
 Most of the gain comes early. The first 25 steps (12M tokens, about 0.1% of pretraining) take whole-page
-perplexity from 23.2 to 21.5, 77% of the total gain (1.7 of 2.2); by step 100 it's 21.1 (94%), and the last 100
-steps add almost nothing. The gold line is back at the original model's quality by step 75. Of the two ways of scaling
-the paper's budget down, matching the share of pretraining (about 20 steps) turned out to be the better guide to where the curve bends.
+perplexity from 23.2 to 21.5, 77% of the total gain. By step 100 it's 21.1 (94%), and the last 100 steps does not add much. The gold line is back at the original model's quality by step 75. Of the two ways of scaling
+the YaRN paper's budget down to our small model of 113M, matching the share of pretraining (about 20 steps for our model size) turned out to be the better guide to where the curve above bends.
 
 ## Visualizing attention
 
-This section looks at what each model attends to while it reads. Attention weights show where
+This section looks at what each model attends to while it reads within their original context length of 1024 tokens. Attention weights show where
 information *can* flow, which is weaker evidence than showing why a model made a prediction (Jain & Wallace, 2019) [[13]](#ref-13). And a weight averaged over a
-layer's heads can hide a single head doing something sharp. So I treat the views below as a way to look inside the models.
+layer's heads can hide a single head doing something sharp. I treat the views below as a way to look inside the models and not necessarily explain their final output predictions.
 
-A small example first, with emojis! 🤗
+A small example first, with emojis 🤗 ! To represent the spirit of my blog series, i picked this sentence: ***"Learning is Fun 🤗, Keep exploring 🔭"***
 
-GPT-2's tokenizer works on bytes, and
-an emoji is four bytes of UTF-8. In ***"Learning is Fun 🤗, Keep exploring 🔭"***, each emoji becomes three tokens: one they
-share (a space and the first two bytes, which every emoji from U+1F000 to U+1FFFF begins with) and two of their own.
-Reading the shared token, a model can't know which emoji is coming; only the later tokens decide. Both models make
-the same bet there. At the shared first token of the telescope, Model A gives 86% to the next byte of the hugging face
-and Model B 68%: having seen one emoji, each expects to see it again.
-
-Asked to continue the line, always picking the most likely next token, both models copy it:
+GPT-2's BPE tokenizer works on bytes, and
+an emoji is 4 bytes of UTF-8. For our sentence, each emoji becomes 3 tokens: one they
+share (a space and the first two bytes, which every emoji begins with) and two of their own.
+Reading the shared token, a model can't know which emoji is coming as only the later tokens decide. 
+In greedy generation mode, when asked to continue the line always picking the most likely next token, both models copy it.
+Each starts a new line and repeats the sentence. Below and in the plots, ↵ marks a line break, which would otherwise
+be invisible.
 
 | | Greedy continuation of "Learning is Fun 🤗, Keep exploring 🔭" |
 |---|---|
 | Model A | ↵ Learning is Fun 🤗, Keep exploring **🤗** ↵ Learning is Fun 🤗, Keep exploring **🤗** ↵ … |
 | Model B | ↵ Learning is Fun 🤗, Keep exploring **🔭** ↵ Learning is Fun 🤗, Keep exploring **🔭** ↵ … |
 
-Model B copies the line exactly. Model A copies it with the wrong emoji at the end, every time: at the token the two
-emoji share, it completes the first one it saw. Small models picking greedily fall into loops like this; that's a
-known property of greedy decoding (Holtzman et al., 2019) [[8]](#ref-8). With sampling instead, both write ordinary on-topic text: Model A continues "for more learning! 🔨 This is
-the first part of our series of lessons!", Model B "for more fun learning activities. 1. The Elements of Play".
+Model B copies the line exactly. Model A copies it with the wrong emoji at the end, every time. Small models picking greedily fall into loops like this; that's a
+known property of greedy decoding (Holtzman et al., 2019) [[8]](#ref-8). With top-k sampling instead (temperature 0.8, top-k 200), both write ordinary on-topic text. Example, Model A continues "*for more learning! 🔨 This is
+the first part of our series of lessons!*", Model B "*for more fun learning activities. 1. The Elements of Play*".
 
 The copying is visible in the attention itself. For each model, the figure below shows every layer's attention,
-averaged over its heads, on the prompt and the first copied line.
+averaged over its heads, on the prompt (read after the `<|endoftext|>` token that starts every page in training) and
+the first line of the model's own greedy continuation.
 
 ![Model A: token-to-token attention in every layer, on the probe and its first copied line](/assets/s1/attention/figures/emoji_tokens_a.png)
 
 ![Model B: token-to-token attention in every layer, on the probe and its first copied line](/assets/s1/attention/figures/emoji_tokens_b.png)
 
-**How to read it.** Each panel is one layer. Rows are the token doing the looking, columns the tokens it looks at;
+Each panel above is one layer averaged over all its heads. Rows (query) are the token doing the looking, columns (keys) the tokens it looks at;
 darker means more attention, and the grey triangle is the future, which a causal model never sees. The top half of
 each panel is the prompt; the bottom half is the copied line. A copying layer shows a stripe running parallel to the
-diagonal in the bottom half: each token of the copy looks back at the token right after its twin in the first line,
-which is the next thing to write.
+diagonal in the bottom half: each token of the copy looks back at the token right after its twin in the first line which is the next token to generate.
 
 The copy stripe is strongest in one layer per model (with a weaker echo in layer 8): layer 7 in Model A and layer 6 in Model B,
-the same layers that hold each model's strongest induction head (see below). The other layers do simpler things. Model B's layer 0 mostly attends to the
+the same layers that hold each model's strongest induction head (see below sub-sections). The other layers do simpler things. Model B's layer 0 mostly attends to the
 token itself and its layer 2 to the previous token, the kind of local bookkeeping a copying head needs as an input.
 Both models also park a lot of attention on the opening `<|endoftext|>` token, Model A especially in its later
 layers.
 
-A single short sentence never reaches Model B's 512-token windows, so for the rest of this
-section I measure every head on full-length text and test one mechanism, copying, directly.
+A single short sentence never reaches Model B's 512-token attention windows, so for the rest of this
+section I measure every head on full-length text and test one mechanism: ***copying***, directly. 
+None of the plots from here on generate text, so there is no prompt or decoding mode. Each model reads a fixed input
+in one forward pass, and I record its attention weights: held-out FineWeb-Edu windows for attention distance and sinks,
+and sequences built from random tokens for induction heads.
 
 ### Attention distance and attention sinks
 
 ![Mean attention distance and first-token attention for every head of both models](/assets/s1/attention/figures/attention_distance.png)
 
-**How to read it.** Each dot is one head, the line its layer's average; blue is Model A, orange Model B, the shaded
+Each dot in the plots above is one head and the line is the layer's average. Blue is Model A, orange Model B, the shaded
 columns Model B's three global layers, and the dashed line Model B's window. The left panel is *attention distance* [[7]](#ref-7):
 how many tokens back a head looks on average, weighting each earlier token by its attention (a measure from the
-Vision Transformer paper). It uses only queries in the second half of 32 held-out 1024-token windows, so every head could look at
+Vision Transformer paper). The equations for the same are written below. It uses only queries in the second half of 32 held-out 1024-token windows, so every head could look at
 least 512 tokens back. The other panels measure *attention sinks* [[6]](#ref-6), a fixed place models park
-attention when nothing else needs it: the share on the window's first position, whatever token sits there (middle),
-and on document separators, the token that starts every page (right).
+attention when nothing else needs it: (middle panel) the share on the window's first position, whatever token sits there,
+and on document separators (right panel) the token that starts every page.
 
 In symbols, with $$p_{q,k}$$ the attention a head puts from the query at position $$q$$ on the key at position $$k \le q$$
 (each query's weights add up to 1), each panel averages one of these over the queries:
@@ -652,7 +648,7 @@ far-sighted layer, global layer 8, averages 148 tokens, and its farthest-looking
 The two sink panels show the clearest difference between the recipes. Model A rests attention on position 0 (up to
 13% of a layer's attention, in its later layers) and even more on document separators (up to 29%). Model B's global layers never
 rest on position 0 (its local layers can't reach it from these queries), but B does rest on separators, though less than A (at most 11% of a layer, in layers 6, 8 and 10). BERT's heads
-behave similarly with its [SEP] separator token, which Clark et al. (2019) [[15]](#ref-15) read as a way for a head to do
+behave similarly with its [SEP] separator token, which Clark et al. (2019) [[15]](#ref-15) interpreted as a way for a head to do
 nothing. The likely reason for the difference between A and B is how each model knows where it is. A's learned position table gives position 0 its own vector, so the first
 position is recognisable whatever token sits there. RoPE gives position 0 no vector of its own, so B has nothing built in that marks it, and it rests on a
 token it can recognise instead.
@@ -665,30 +661,29 @@ the token that followed the earlier occurrence, so the model can copy what came 
 other clue: a block of 64 random tokens, random filler, then the same 64 tokens again. Nothing can predict a random
 token except the earlier copy. Varying the filler puts the repeat either 256 tokens back, inside Model B's local
 window, or 768 tokens back, beyond it. Model A can attend 768 tokens back in any layer. Model B can only do it in its
-three global layers.
+three global layers. 
 
-![Each model's strongest induction head on a short repeated block of random tokens](/assets/s1/attention/figures/induction_heads.png)
-
-**How to read it.** Same format as the emoji figure, for each model's strongest induction head reading 12 random
-tokens and then the same 12 again. In the first copy the head rests on the first token; in the second, each token
-attends to the token right after its earlier twin, the stripe one step right of the earlier copy.
-
-![Induction score of every head at two repeat distances, and each model's loss on the repeated tokens](/assets/s1/attention/figures/induction.png)
-
-**How to read it.** In the two left panels, each dot is one head, and its *induction score* is the attention it puts
-on exactly the token it should copy, averaged over the repeated block: near 1 is a clean induction head, near 0 is
-none. The shaded columns are Model B's global layers again. The right panel asks whether the copying works: the loss
-on the second copy of the block, against the dashed line for the first copy, which neither model has any way to
-predict. A loss near zero means the model copies.
-
-In symbols: if the block's first copy starts at position $$s$$ and its repeat sits $$D$$ tokens later (256 or 768), then
+Each head gets an *induction score*: the attention it puts on exactly the token it should copy, averaged over the
+repeated block. Near 1 is a clean induction head, near 0 is none. In symbols: if the block's first copy starts at position $$s$$ and its repeat sits $$D$$ tokens later (256 or 768), then
 the token at position $$t$$ in the second copy has its twin at $$t - D$$, and the token to copy is the one right after
 it, at $$t - D + 1$$. A head's induction score averages its attention there over the $$n - 1$$ tokens of the second copy
 that have a next token to copy ($$n = 64$$), and over the test sequences:
 
 $$\text{induction score} = \frac{1}{n-1}\sum_{t=s+D}^{s+D+n-2} p_{t,\;t-D+1}$$
 
-The loss on each copy is Part 1's cross-entropy, $$-\ln p(x_{t+1} \mid x_{\le t})$$, averaged over the copy's tokens.
+![Each model's strongest induction head on a short repeated block of random tokens](/assets/s1/attention/figures/induction_heads.png)
+
+The above plot is the same format as the emoji figure, for each model's strongest induction head reading 12 random
+tokens and then the same 12 again. In the first copy the head rests on the first token; in the second, each token
+attends to the token right after its earlier twin, the stripe one step right of the earlier copy.
+
+![Induction score of every head at two repeat distances, and each model's loss on the repeated tokens](/assets/s1/attention/figures/induction.png)
+
+In the two left panels, each dot is one head, and its height is its induction score. The shaded columns are Model B's global layers again. The right panel asks whether the copying works: the loss
+on the second copy of the block, against the dashed line for the first copy, which neither model has any way to
+predict. A loss near zero means the model copies.
+
+The loss on each copy is [Part 1's cross-entropy](/gpt2-to-gemma-part-1/#confirming-at-our-full-98b-token-budget), $$-\ln p(x_{t+1} \mid x_{\le t})$$, averaged over the copy's tokens.
 
 With the repeat 256 tokens back, both models have clean induction heads: Model A's strongest is layer 7, head 11
 (score 0.93), with 5 heads above 0.3; Model B's is layer 6, head 11 (0.90), with 4. Both copy, and Model A copies much better.
@@ -700,31 +695,29 @@ With the repeat 768 tokens back, Model A is barely affected: the same head still
 costs 12.3 nats, almost as much as tokens it has never seen. Its strongest induction head lives in layer 6, a local
 layer, and the earlier copy is now out of that layer's reach. None of its three global layers took over the job.
 
-Average loss doesn't show this cost of the local/global recipe: Model B's windows save memory, and the model loses
+Average loss doesn't show this cost of the local/global recipe: Model B's attention windows save memory, and the model loses
 the ability to copy from beyond them.
 
 ### Where the two models disagree
 
 Average loss can hide where two models differ, so I compared their predictions token by token on held-out text,
 using the KL divergence between the two next-token distributions, KL(A ‖ B): the extra surprise, in nats, of
-predicting with Model B's distribution when Model A's is the reference. Zero means identical predictions.
-
-For one position, summing over every token $$v$$ in the vocabulary:
+predicting with Model B's distribution when Model A's is the reference. Zero means identical predictions. For one position, summing over every token $$v$$ in the vocabulary:
 
 $$\mathrm{KL}(A \,\|\, B) = \sum_{v} p_A(v)\,\big(\ln p_A(v) - \ln p_B(v)\big)$$
 
 ![Per-token KL between the two models, and each model's attention at the strongest disagreement](/assets/s1/attention/figures/disagreement.png)
 
-**How to read it.** The left panel counts tokens by how much the models disagree, on a log scale: most tokens sit in
-the middle, a few in the long tail on the right. The two heatmaps take the single strongest disagreement and show,
+The left panel above counts tokens by how much the models disagree, on a log scale: most tokens sit in
+the middle, a few in the long tail. The right two heatmaps take the single strongest disagreement and show,
 for each model and layer, where its attention went from that token, averaged over heads. The first column collects the
 attention that went to tokens before the passage shown, so each row adds up to 1.
 
 Over 20,480 held-out tokens, the typical disagreement is small: a mean KL of 0.29 nats and a median of 0.21. Only 3%
-of tokens exceed 1 nat and 0.1% exceed 3. On these 20,480 tokens, average loss tells Part 1's story: 2.98 for A, 2.97 for B.
+of tokens exceed 1 nat and 0.1% exceed 3. On these 20,480 tokens, average loss is same as expected from Part 1 training runs: 2.98 for A, 2.97 for B.
 
 In the tail, B does slightly better: among the 1,000 strongest disagreements, B
-has the lower loss on 59%. The strongest few are mostly completions where one model knows the phrase and the other
+has the lower loss on 59%. The strongest few are mostly completions where one model predicts the phrase and the other
 doesn't:
 
 | Context (end) | True next token | Model A's guess | Model B's guess |
@@ -734,84 +727,140 @@ doesn't:
 | "…the measurement of these inflammatory 'medi" | "ators" | "as" 63% | **"ators" 87%** |
 | "…if you have 40 CALs … The 41st" | " user" | " mode" 12% | " CAL" 96% |
 
-The last row goes the other way: Model B is very sure of a word that's wrong. At the strongest disagreement,
-"daisy-chained", the attention is spread in a similar way in both models: about half or more goes to tokens before the passage (60% in A,
-48% in B), a fifth to a quarter to "da" and "isy", the word being completed, and the rest across the passage. So the two models look at similar places and
+The last row goes the other way: Model B is very sure of a word that's wrong. So the two models look at similar places and
 draw different conclusions from them, which attention weights alone can't show.
 
 ## Caveats, and what to expect at larger scale
 
-The inference numbers come from one model size, two machines and float32 without kernel fusion or CUDA graphs, all of
-which push a 124M model towards being overhead-bound. The position analysis covers one context length. Here's what
-should carry over to larger models and longer contexts, and what each expectation rests on:
+The inference numbers in the KV cache analysis section come from one model size, two machines and float32 without kernel fusion or CUDA graphs, all of
+which push a 124M model towards being overhead-bound. The RoPE position analysis covers one context length. So here i discuss what
+should carry over to larger models  (my go-to pick being a 7B model size) and longer contexts, and what is the basis of my understanding:
 
 | Finding at 124M | With bigger models | With longer contexts | Basis |
 |---|---|---|---|
-| KV cache 6.4× smaller | Same ratio per layer; the absolute size grows with $$d·L$$ | The ratio grows (≈19× at 32k for a 7B-class model with Gemma 3's layout) | Arithmetic |
-| Decode speed depends on the machine; overhead-bound on H100 | Becomes memory-bound (a 7B model's weights alone take ~4 ms to read per step), so the smaller cache pays | Cache traffic dominates | Arithmetic + both measurements |
+| KV cache 6.4× smaller for Model B compared to Model A | Same ratio per layer; the absolute size grows with $$d·L$$ | The ratio grows (≈19× at 32k for a 7B-class model with Gemma 3's layout) | Mathematical formula above |
+| Decode speed depends on the machine; overhead-bound on H100 | Becomes memory-bound (a 7B model's weights alone take ~4 ms to read per step), so the smaller cache pays off | Cache traffic dominates | Arithmetic + both measurements |
 | Reading the cache: 1 FLOP per byte for A, 4 for B | Unchanged: it depends only on $$n_h/n_{kv}$$ | Unchanged, but the cache grows | Arithmetic |
 | RoPE with base 10,000; 18 of 32 bands turn within the context | — | The base must rise (Llama 3: 500k; Gemma 3 global: 1M), or bands must be rescaled (YaRN) | Arithmetic + papers [[3]](#ref-3), [[9]](#ref-9), [[10]](#ref-10) |
-| YaRN at 4×: zero-shot removes the breakdown; 25 fine-tuning steps (~0.1% of pretraining) give most of the gain | The paper's own results are at 7B and above; the 0.1% budget matched here too | Larger stretches need more fine-tuning, or the base raised in pretraining | One model, one factor, one seed |
-| Model B's induction heads sit in a local layer, so it can't copy from 768 tokens back | Unknown: larger hybrid models may place copying heads in global layers | The window caps copying unless global layers learn it | One seed per model; a 64-token block |
-| A sinks attention on position 0, B (RoPE) on separator tokens | Attention sinks are widespread at scale (Xiao et al., 2023) [[6]](#ref-6) | Sinks on a token need that token within reach of local layers | 32 windows, both models |
+| YaRN at 4×: zero-shot removes the breakdown; 25 fine-tuning steps (~0.1% of pretraining) give most of the gain | The paper's own results are at 7B and above; the 0.1% budget matched here too | Larger stretches need more fine-tuning, or the base raised in pretraining | Experimental findings above and the YaRN paper |
+| Model B's induction heads sit in a local layer, so it can't copy from 768 tokens back | Unknown: larger hybrid models may place copying heads in global layers | The window caps copying unless global layers learn it | Experimental findings above |
+| Model A sinks attention on position 0, Model B (RoPE) on separator tokens | Attention sinks are widespread at scale (Xiao et al., 2023) [[6]](#ref-6) | Sinks on a token need that token within reach of local layers | Experimental findings above |
 
 A second seed of Model B could, for instance, place its induction head in a global layer, which would change the
-copying result. The attention analysis is also descriptive: it shows where attention goes. Showing that the model needs it there takes
+copying result. The attention analysis is also descriptive: it shows where attention goes. Showing that the model needs it there requires
 a causal check, such as switching a head off and measuring what breaks.
 
 ## Appendix
 
 ### Attention and FlashAttention
 
-This works through the numbers behind the short note on attention's quadratic cost.
+This section works through three claims behind the main text's [note on attention's quadratic cost](#a-note-on-attentions-quadratic-cost):
+attention's compute grows with the square of the context length. FlashAttention removes that square from memory but not
+from compute. Besides, by limiting which keys a query sees, as Model B's local layers do, lowers the compute itself.
 
-All of this has been counted per token, and per token, attention is *linear* in context length: a token at position $$p$$
-compares itself with $$p + 1$$ keys, so it costs $$4d·(p + 1)$$ FLOPs. That's why the formula uses the average, $$4d·\bar{k}$$. The
-famous quadratic appears when you add up a whole sequence. $$T$$ tokens, each attending to everything before it, make $$T(T + 1)/2$$ query-key pairs, about $$2d·T^2$$ FLOPs per layer.
-For a 7B-class model with full attention, the attention FLOPs for one sequence grow from about 0.3 TFLOP at 1k
-tokens to about 4,500 TFLOP at 128k: 128 times the context, about 16,000 times the work.
+- **Cost per token.** A query at position $$p$$ (counting from 0) is compared with the $$p + 1$$ keys up to and including its
+own. Each attention score is a dot product of length $$h$$ in each of the $$n_h$$ heads, $$2h·n_h = 2d$$ FLOPs, and multiplying with value vector costs another $$2d$$. So one token costs $$4d·(p + 1)$$ 
+FLOPs per layer, linear in its position ([Part 1, Counting the FLOPs](/gpt2-to-gemma-part-1/#counting-the-flops)).
+Across a sequence of $$T$$ tokens, the queries at positions 0, 1, …, $$T - 1$$ see 1, 2, …, $$T$$ keys, for a total of $$T(T + 1)/2$$.
+Dividing by the $$T$$ queries, the average query sees $$\bar{k} = (T + 1)/2$$ keys, so the average token
+costs $$4d·(T + 1)/2 = 2d(T + 1)$$ FLOPs, the per-token figure used in [FLOPs at long contexts](#flops-at-long-contexts).
 
-FlashAttention [[11]](#ref-11) computes exact attention, so the arithmetic stays the same, and its backward pass
-even recomputes the scores instead of storing them. What it reduces is memory traffic. Instead of writing the $$T × T$$
-score matrix to GPU memory and reading it back twice, it works in tiles that fit on-chip and fuses score, softmax and
-weighted sum into one kernel. Memory grows with $$T$$ instead of $$T^2$$, and the time saved is time spent waiting on memory.
+- **Cost per sequence.** Adding up all $$T$$ tokens gives
 
-Our own runs show why that matters even at 1024 tokens. With 12 heads and 60 sequences per GPU, the score matrices
-for one layer would take about 1.5 GB in bf16, and keeping all 12 layers' for the backward pass would take about
-18 GB. At 128k tokens, just a single head's scores for one sequence would be 34 GB, more than a third of an H100's memory.
-Without FlashAttention, long-context training wouldn't fit.
+  $$\sum_{p=0}^{T-1} 4d·(p + 1) = 4d·\frac{T(T + 1)}{2} \approx 2d·T^2$$
 
-So FlashAttention makes quadratic attention practical, and the cost stays quadratic. Within exact attention, only
-restricting which keys a query sees changes the order itself, like what Model B's local windows do: a local layer costs $$O(T·W)$$ per sequence, linear in $$T$$. In time, that saving needs a kernel that skips the blocks outside the window, like
-FlexAttention's block masks or FlashAttention's window option. With an ordinary dense mask, all $$T^2$$ scores are
-computed and most thrown away, which is why the dense-mask version in Part 1's ladder trained *slower*; FlexAttention recovered about 5% of that.
+  FLOPs per layer, and gives back the famous quadratic. So $$x$$ times the context costs $$x^2$$ times the work.
 
-The same holds for decoding with a KV cache: each new token costs $$O(T)$$, one pass over the
-cache, so generating a whole sequence still adds up to $$O(T^2)$$ spread across the steps.
+- **Memory without FlashAttention:** A standard implementation writes each head's $$T × T$$ matrix of scores to GPU memory,
+  reads it back for the softmax, writes the probabilities and reads them again for the weighted sum of values, then keeps
+  them for the backward pass. In bf16 (2 bytes per number), one layer's matrices for a batch of $$B$$ sequences take
+
+  $$B · n_h · T^2 · 2 \text{ bytes.}$$
+
+  In our runs ($$B = 60$$ sequences per GPU, $$n_h = 12$$, $$T = 1024$$) that's about 1.5 GB per layer, or about 18 GB for all 12 layers.
+  At 128k tokens (128 × 1024 = 131,072), a single head's $$131{,}072^2$$ matrix for a single sequence takes about 34 GB in bf16, more than a third
+  of an H100's 80 GB.
+
+- **What FlashAttention changes:** FlashAttention [[11]](#ref-11) computes the same exact attention without ever storing the $$T × T$$
+  matrix. It splits the queries and keys into tiles small enough for the GPU's on-chip memory and, in one kernel,
+  computes scores, softmax and weighted sum for one tile at a time, keeping a running maximum and sum so the softmax comes out exact.
+  Memory then grows with $$T$$ instead of $$T^2$$, which is what makes long-context training fit at all. The FLOPs don't go down:
+  every query-key pair is still scored, and the backward pass recomputes the scores instead of reading them back, which adds a little
+  arithmetic. The time it saves is time the GPU would have spent waiting on memory.
+
+- **What lowers compute:** Only limiting which keys a query sees. A query's cost is $$4d$$ per key it sees, so what matters
+  is $$\bar{k}$$, the average number of keys per query. A global layer, as seen above, has $$\bar{k} = (T + 1)/2$$. In a local layer, the first $$W$$
+  positions see 1, 2, …, $$W$$ keys, which adds up to $$W(W + 1)/2$$, and the other $$T - W$$ positions see $$W$$ keys each,
+  adding $$(T - W)W$$. Dividing the total by the $$T$$ queries gives the average ([Part 1's appendix](/gpt2-to-gemma-part-1/#counting-the-flops)):
+
+  $$\bar{k}_W = \frac{W(W + 1)/2 + (T - W)\,W}{T}.$$
+
+  Since $$\bar{k}_W$$ can never exceed $$W$$, a local layer's cost per token stops growing once $$T$$ passes $$W$$, and its cost per
+  sequence, $$4d·T·\bar{k}_W$$, grows linearly in $$T$$ instead of quadratically. With Model B's $$W = 512$$:
+
+  | Context $$T$$ | Global $$\bar{k}$$ | Local $$\bar{k}_W$$ | Local layer's saving |
+  |---|---|---|---|
+  | 1,024 | 512.5 | 384.25 | 1.33× |
+  | 131,072 (128k) | 65,536.5 | 511.0 | 128× |
+
+  That saving only shows up in time if the kernel skips the scores outside the window, as FlexAttention's block masks [[18]](#ref-18) and
+  FlashAttention's window option do. With an ordinary dense mask, all $$T^2$$ scores are computed and most are then thrown away,
+  which is why the dense-mask Model B in Part 1's ladder trained *slower*. And switching to FlexAttention won back about 5% in time.
+
+- **During generation.** With a KV cache, each new token is a single query against the cached keys: $$4d·(p + 1)$$ FLOPs at
+position $$p$$ in a global layer, at most $$4d·W$$ in a local one. Generating $$T$$ tokens therefore still adds up to about $$2d·T^2$$
+per global layer, spread across the $$T$$ steps.
 
 ### How the band measures are computed
 
-The measures behind the band-usage heatmap and the three real heads in the position section.
+The position section uses two measures of how a head uses RoPE's 32 bands. The first comes from the weights alone and
+says how much a head *can* use each band: it is behind the [band-usage heatmap](#fig-band-usage) and the slow-band weight. The
+second comes from running real text and says how much each band *does* add to the score at each distance: it is behind
+the [three real heads](#fig-real-heads). The notation follows [How an attention head uses the clocks](#how-an-attention-head-uses-the-clocks).
 
-**From the weights.** Write $$W_q^{(j)}$$ for the rows of the head's query projection
-that produce band $$j$$'s two dimensions, and $$W_k^{(j)}$$ for the same rows of the key projection it shares under
-grouped-query attention, each with the RMSNorm gain in front of attention folded in. Then:
+**From the weights.** The RMSNorm in front of attention scales every token's vector to the same length, $$\sqrt{d}$$,
+and then multiplies it by a learned gain. Let $$x$$ be the vector after the scaling and before the gain, so $$\lVert x \rVert = \sqrt{d}$$,
+and fold the gain into the projection weights. Band $$j$$ of a query uses two dimensions, $$j$$ and $$j + h/2$$, so it comes from two rows
+of the head's query projection. Call those two rows $$W_q^{(j)}$$, a $$2 × d$$ matrix, so that band $$j$$'s pair is $$W_q^{(j)} x$$.
+Define $$W_k^{(j)}$$ the same way from the key projection; under grouped-query attention, that's the
+key head the query head shares with three others.
 
-$$w_j = \big\lVert W_q^{(j)} \big\rVert \cdot \big\lVert W_k^{(j)} \big\rVert, \qquad
-s_j = \frac{w_j}{\sum_{l=1}^{32} w_l}, \qquad
-\text{slow-band weight} = \sum_{j \,\in\, \text{slow}} s_j$$
+A pair's length can't exceed its matrix's [Frobenius norm](https://en.wikipedia.org/wiki/Matrix_norm#Frobenius_norm) (the square root of the sum of its squared entries) times the
+input's length, because each of the two rows' dot product with $$x$$ is at most that row's length times $$\sqrt{d}$$. So $$\lvert z_j^q \rvert \le \lVert W_q^{(j)} \rVert \sqrt{d}$$, and likewise for the key. In the
+[score formula](#how-an-attention-head-uses-the-clocks), band $$j$$'s wave has amplitude $$\lvert c_j \rvert / \sqrt{h} = \lvert z_j^q \rvert\, \lvert z_j^k \rvert / \sqrt{h}$$, since the length of a
+product of complex numbers is the product of their lengths. So for any two tokens
 
-where the norms are Frobenius norms.
+$$\frac{\lvert c_j \rvert}{\sqrt{h}} \;\le\; \frac{d}{\sqrt{h}}\, w_j, \qquad
+w_j = \big\lVert W_q^{(j)} \big\rVert \cdot \big\lVert W_k^{(j)} \big\rVert.$$
 
-**On real text.** Using the complex form from the RoPE derivation, write $$z_j^q(m) = q_j(m) + \mathrm{i}\,q_{j+h/2}(m)$$ for band $$j$$ of the query at position $$m$$, *before* RoPE's rotation, and $$z_j^k(n)$$ likewise for the key. Band $$j$$'s average contribution
-to the score at distance $$\Delta$$, over a window of $$T = 1024$$ tokens, is
+So $$w_j$$ caps how loud band $$j$$'s wave can be in this head. Dividing by the head's total gives each band's share,
+and adding the shares of the 14 slow bands gives the slow-band weight:
+
+$$s_j = \frac{w_j}{\sum_{l=1}^{32} w_l}, \qquad
+\text{slow-band weight} = \sum_{j \,\in\, \text{slow}} s_j.$$
+
+Each cell of the heatmap is one head's $$s_j$$. A head that weighted all 32 bands equally would have a slow-band weight
+of 14/32 ≈ 44%, the "even spread" in the main text. The cap is only an upper bound: real inputs may not line up with
+the rows that give a band its weight, which is why the second measure looks at real text.
+
+**On real text.** I ran 64 held-out windows of $$T = 1024$$ tokens through Model B and recorded each head's queries and keys
+*before* RoPE's rotation. As in the main text, $$z_j^q(m)$$ and $$z_j^k(n)$$ are band $$j$$'s pairs at positions $$m$$ and $$n$$,
+written as complex numbers. By Step 2 of [How an attention head uses the clocks](#how-an-attention-head-uses-the-clocks),
+band $$j$$'s share of the score between a query and a key $$\Delta = m - n$$ positions apart
+is $$\mathrm{Re}\big[ z_j^q(m)\, \overline{z_j^k(n)}\, e^{\mathrm{i}\Delta\theta_j} \big] / \sqrt{h}$$.
+A window has $$T - \Delta$$ query-key pairs at distance $$\Delta$$, and averaging over them gives
 
 $$S_j(\Delta) = \frac{1}{T - \Delta} \sum_{n=0}^{T-1-\Delta}
-\frac{1}{\sqrt{h}}\, \mathrm{Re}\Big[\, z_j^q(n+\Delta)\; \overline{z_j^k(n)}\; e^{\,\mathrm{i}\,\Delta\,\theta_j} \Big]$$
+\frac{1}{\sqrt{h}}\, \mathrm{Re}\Big[\, z_j^q(n+\Delta)\; \overline{z_j^k(n)}\; e^{\,\mathrm{i}\,\Delta\,\theta_j} \Big],$$
 
-averaged over 64 held-out windows. The factor $$e^{\mathrm{i}\Delta\theta_j}$$ is RoPE's rotation at that distance; everything else is
-content. The figure's bottom row is the head's mean score, $$S(\Delta) = \sum_j S_j(\Delta)$$. The top row sums $$S_j(\Delta)$$ over each speed
-group: fast, middle and slow.
+which is then averaged over the 64 windows. The factor $$e^{\mathrm{i}\Delta\theta_j}$$ is RoPE's rotation at that distance;
+everything else is content. Since a head's score is the sum of its 32 bands' shares, and an average of a sum is the sum
+of the averages, the bands add up exactly to the head's mean pre-softmax score at each distance:
+
+$$S(\Delta) = \sum_{j=1}^{32} S_j(\Delta).$$
+
+The figure's bottom row plots $$S(\Delta)$$. The top row splits the same sum into the fast, middle and slow bands,
+so the three top curves add up to the bottom one.
 
 ### Code and models
 
@@ -857,6 +906,7 @@ If you spot a mistake, or have comments or critiques, I'd be glad to hear them o
 15. <span id="ref-15"></span>Clark et al. (2019). [What Does BERT Look At? An Analysis of BERT's Attention](https://arxiv.org/abs/1906.04341).
 16. <span id="ref-16"></span>Wang & Chen (2020). [What Do Position Embeddings Learn? An Empirical Study of Pre-Trained Language Model Positional Encoding](https://arxiv.org/abs/2010.04903).
 17. <span id="ref-17"></span>Chowdhery et al. (2022). [PaLM: Scaling Language Modeling with Pathways](https://arxiv.org/abs/2204.02311).
+18. <span id="ref-18"></span>Dong et al. (2024). [Flex Attention: A Programming Model for Generating Optimized Attention Kernels](https://arxiv.org/abs/2412.05496).
 
 ### Citation
 
