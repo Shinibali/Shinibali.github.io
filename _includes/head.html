@@ -43,11 +43,12 @@
     html[data-theme="dark"] td { border-color: #2c3038; }
     html[data-theme="dark"] tr:nth-child(even) { background-color: #1c1f25; }
     html[data-theme="dark"] .post-content img { filter: brightness(0.88); border-radius: 4px; }
-    .theme-toggle { float: right; margin: 13px 0 0 18px; padding: 2px 8px; font-size: 18px; line-height: 26px;
+    /* floats right after the nav, so it sits left of "About"; the right margin is the gap between them */
+    .theme-toggle { float: right; margin: 13px 28px 0 18px; padding: 2px 8px; font-size: 18px; line-height: 26px;
                     background: none; color: inherit; border: 1px solid #d0d3d8; border-radius: 6px; cursor: pointer; }
     html[data-theme="dark"] .theme-toggle { border-color: #3a3f48; }
-    /* on phones minima pins its menu button to the top right; sit just left of it */
-    @media screen and (max-width: 600px) { .theme-toggle { margin-right: 44px; } }
+    /* on phones minima pins its 38px menu button 15px from the right edge; leave ~16px between them */
+    @media screen and (max-width: 600px) { .theme-toggle { margin-right: 54px; } }
   </style>
   <script>
     // Pick the theme before the page paints (no white flash): the reader's saved choice, else their system setting.
